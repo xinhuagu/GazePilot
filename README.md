@@ -4,11 +4,18 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-green.svg)](LICENSE)
 
-AI-driven screen automation for VDI-hosted applications. Train a custom YOLO neural network to perceive your application's UI elements from screen pixels alone, then let an LLM operate it precisely.
+AI-driven screen automation for any application — desktop, VDI, remote, or legacy. Train a custom YOLO neural network to perceive your application's UI from screen pixels alone, then let an LLM operate it precisely. No accessibility API, no source code, no plugins required.
 
 ## Why ScreenPilot?
 
-VDI applications have no accessibility API, no scripting interface, and no source code access. General-purpose agents (Anthropic Computer Use, OmniParser) work across any app but lack precision for specific enterprise software. ScreenPilot flips this: **train once for your application, operate with high accuracy forever.**
+Many applications have no automation API — enterprise software, legacy systems, VDI-hosted apps, proprietary tools. General-purpose screen agents (Anthropic Computer Use, OmniParser) work across any app but lack precision for specific software. ScreenPilot flips this: **train once for your application, operate with high accuracy forever.**
+
+Works with:
+- Desktop applications (Windows, macOS)
+- VDI clients (Citrix, VMware Horizon, RDP)
+- Browser-based applications
+- Legacy systems and terminal emulators
+- Any software you can see on screen
 
 ```
 Train a model on YOUR app → Pack it → ScreenPilot operates it precisely
