@@ -16,6 +16,14 @@ def main(argv: list[str] | None = None) -> None:
     # --- benchmark ---
     sub.add_parser("benchmark", help="Run capture + change detection benchmark")
 
+    # --- monitor ---
+    monitor_p = sub.add_parser("monitor", help="Real-time cursor-to-element monitoring")
+    monitor_p.add_argument("--window", type=str, help="Window name to monitor")
+    monitor_p.add_argument("--region", type=str, help="Manual region: left,top,width,height")
+    monitor_p.add_argument("--pack", type=str, default="", help="Force a specific pack")
+    monitor_p.add_argument("--packs-dir", type=str, default="packs")
+    monitor_p.add_argument("--retina-scale", type=float, default=2.0)
+
     # --- collect ---
     collect_p = sub.add_parser("collect", help="Collect training screenshots")
     collect_p.add_argument("--window", type=str, help="Window name to capture")
@@ -61,6 +69,17 @@ def main(argv: list[str] | None = None) -> None:
 
         bench = importlib.import_module("scripts.benchmark")
         bench.main()
+
+    elif args.command == "monitor":
+        from screenpilot.core.monitor import run_monitor
+
+        region = _resolve_region(args)
+        run_monitor(
+            region=region,
+            pack_name=args.pack,
+            packs_dir=args.packs_dir,
+            retina_scale=args.retina_scale,
+        )
 
     elif args.command == "collect":
         from screenpilot.training.collector import run_collect
