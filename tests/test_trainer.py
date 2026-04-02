@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from screenpilot.training.trainer import PackTrainer, TrainConfig, TrainResult
+from gazepilot.training.trainer import PackTrainer, TrainConfig, TrainResult
 
 
 def test_package_pack_creates_structure():

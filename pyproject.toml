@@ -1,5 +1,5 @@
 [project]
-name = "screenpilot"
+name = "gazepilot"
 version = "0.1.0"
 description = "Real-time screen monitoring and AI-driven automation for VDI-hosted applications"
 requires-python = ">=3.11"
@@ -46,14 +46,14 @@ dev = [
 ]
 # Everything for local development on macOS
 all = [
-    "screenpilot[platform,ml,llm,training,dev]",
+    "gazepilot[platform,ml,llm,training,dev]",
 ]
 
 [project.scripts]
-screenpilot = "screenpilot.cli:main"
+gazepilot = "gazepilot.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["screenpilot*"]
+include = ["gazepilot*"]
 
 [build-system]
 requires = ["setuptools>=68.0"]

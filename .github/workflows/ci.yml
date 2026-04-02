@@ -23,30 +23,30 @@ jobs:
       - name: Smoke test imports
         run: |
           python -c "
-          from screenpilot.config import ScreenPilotConfig, CaptureRegion
-          from screenpilot.utils.geometry import Rect, Point, iou
-          from screenpilot.utils.timing import FPSCounter, Timer
-          from screenpilot.capture.change_detector import ChangeDetector, ChangeLevel
-          from screenpilot.core.application_pack import ApplicationPack, PackMetadata
-          from screenpilot.core.model_registry import ModelRegistry
-          from screenpilot.core.app_router import AppRouter
-          from screenpilot.training.collector import DataCollector
-          from screenpilot.training.trainer import PackTrainer
-          from screenpilot.training.dataset_prep import split_dataset
-          from screenpilot.tracker.ui_map import UIMap, UIElement, Detection, UIMapDiff
-          from screenpilot.tracker.element_tracker import ElementTracker
-          from screenpilot.actions.action_types import Action, ActionResult, ActionType
-          from screenpilot.actions.coordinate_transform import CoordinateTransform
-          from screenpilot.llm.formatters import format_state
-          from screenpilot.llm.parsers import parse_actions
+          from gazepilot.config import GazePilotConfig, CaptureRegion
+          from gazepilot.utils.geometry import Rect, Point, iou
+          from gazepilot.utils.timing import FPSCounter, Timer
+          from gazepilot.capture.change_detector import ChangeDetector, ChangeLevel
+          from gazepilot.core.application_pack import ApplicationPack, PackMetadata
+          from gazepilot.core.model_registry import ModelRegistry
+          from gazepilot.core.app_router import AppRouter
+          from gazepilot.training.collector import DataCollector
+          from gazepilot.training.trainer import PackTrainer
+          from gazepilot.training.dataset_prep import split_dataset
+          from gazepilot.tracker.ui_map import UIMap, UIElement, Detection, UIMapDiff
+          from gazepilot.tracker.element_tracker import ElementTracker
+          from gazepilot.actions.action_types import Action, ActionResult, ActionType
+          from gazepilot.actions.coordinate_transform import CoordinateTransform
+          from gazepilot.llm.formatters import format_state
+          from gazepilot.llm.parsers import parse_actions
           print('All imports OK')
           "
 
       - name: Ruff lint
-        run: ruff check screenpilot/
+        run: ruff check gazepilot/
 
       - name: Ruff format check
-        run: ruff format --check screenpilot/
+        run: ruff format --check gazepilot/
 
       - name: Run tests
         run: pytest tests/ -v --tb=short

@@ -2,7 +2,7 @@
 
 import time
 
-from screenpilot.utils.timing import FPSCounter, Timer
+from gazepilot.utils.timing import FPSCounter, Timer
 
 
 def test_timer_measures_elapsed():

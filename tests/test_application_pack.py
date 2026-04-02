@@ -5,9 +5,9 @@ from pathlib import Path
 
 import yaml
 
-from screenpilot.core.app_router import AppRouter
-from screenpilot.core.application_pack import ApplicationPack, PackMetadata
-from screenpilot.core.model_registry import ModelRegistry
+from gazepilot.core.app_router import AppRouter
+from gazepilot.core.application_pack import ApplicationPack, PackMetadata
+from gazepilot.core.model_registry import ModelRegistry
 
 
 def _create_pack_dir(tmp: Path, name: str, window_match: list[str] | None = None) -> Path:

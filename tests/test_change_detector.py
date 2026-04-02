@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from screenpilot.capture.change_detector import ChangeDetector, ChangeLevel
+from gazepilot.capture.change_detector import ChangeDetector, ChangeLevel
 
 
 def _make_frame(width: int = 200, height: int = 150, color: tuple = (128, 128, 128, 255)) -> np.ndarray:

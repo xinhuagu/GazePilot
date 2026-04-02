@@ -1,6 +1,6 @@
 """Tests for geometry primitives."""
 
-from screenpilot.utils.geometry import Point, Rect, iou
+from gazepilot.utils.geometry import Point, Rect, iou
 
 
 def test_point_basic():
