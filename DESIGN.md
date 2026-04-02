@@ -523,75 +523,89 @@ Do not rewrite for performance before profiling. For this system, architecture c
 ```
 ScreenPilot/
 ├── screenpilot/
-│   ├── config.py
-│   ├── core/
-│   │   └── orchestrator.py         # Main event loop
-│   ├── runtime/
-│   │   ├── app_router.py           # Detect active application / session
-│   │   ├── model_registry.py       # Load/cache/unload ApplicationPacks
-│   │   └── application_pack.py     # ApplicationPack contract
-│   ├── capture/
-│   │   ├── screen_capture.py       # mss capture + ring buffer
-│   │   ├── window_finder.py        # macOS window enumeration
-│   │   ├── region.py               # Capture region selection
-│   │   └── change_detector.py      # Frame diff detection
-│   ├── detection/
-│   │   ├── detector.py             # YOLO inference
-│   │   ├── post_processor.py       # Coordinate mapping + hierarchy
-│   │   ├── screen_classifier.py    # Screen state classifier
-│   │   └── element_verifier.py     # Pre-click local verification
-│   ├── tracker/
-│   │   ├── ui_map.py               # UIMap/UIElement data structures
-│   │   ├── element_tracker.py      # Element matching + stability tracking
-│   │   └── terminal_tracker.py     # Virtel/COBOL specialization
-│   ├── cursor/
-│   │   └── cursor_monitor.py       # Real-time cursor tracking
-│   ├── actions/
-│   │   ├── executor.py             # pyautogui action execution
-│   │   ├── action_types.py         # Action data types
-│   │   └── coordinate_transform.py # Retina coordinate translation
-│   ├── llm/
-│   │   ├── interface.py            # LLM API calls
-│   │   ├── formatters.py           # UIMap → text serialization
-│   │   └── parsers.py              # LLM response parsing
-│   ├── knowledge/                  # [Optional] Enabled when manual available
-│   │   ├── manual_parser.py        # HTML manual parser
-│   │   ├── semantic_dict.py        # Element semantic dictionary
-│   │   └── workflow_graph.py       # Workflow graph
-│   ├── training/
-│   │   ├── collector.py            # Training data collector
-│   │   ├── trainer.py              # Ultralytics training wrapper
-│   │   ├── augmentations.py        # VDI-specific augmentations
-│   │   └── evaluator.py            # Model evaluation
+│   ├── cli.py                      # CLI entry point (collect, prep, train, etc.)
+│   ├── config.py                   # ScreenPilotConfig dataclass + YAML loading
+│   │
+│   ├── core/                       # System wiring
+│   │   ├── orchestrator.py         # Main runtime loop (wires all modules)
+│   │   ├── application_pack.py     # ApplicationPack contract + loader
+│   │   ├── model_registry.py       # Scan/index/lookup packs
+│   │   └── app_router.py           # Route active window → pack
+│   │
+│   ├── capture/                    # Screen input (M1 — implemented)
+│   │   ├── screen_capture.py       # mss threaded capture + ring buffer
+│   │   ├── window_finder.py        # macOS Quartz window enumeration
+│   │   └── change_detector.py      # 3-tier frame diff (hash → MAD → dirty rects)
+│   │
+│   ├── detection/                  # Model inference
+│   │   └── detector.py             # Runs pack's YOLO model → list[Detection]
+│   │
+│   ├── tracker/                    # Element tracking
+│   │   ├── ui_map.py               # UIMap, UIElement, Detection (central types)
+│   │   └── element_tracker.py      # IoU matching, stability, hierarchy → UIMap
+│   │
+│   ├── cursor/                     # Cursor monitoring
+│   │   └── cursor_monitor.py       # 60Hz poll → resolve cursor to UIElement
+│   │
+│   ├── actions/                    # Action execution
+│   │   ├── action_types.py         # Action, ActionResult, ActionType
+│   │   ├── executor.py             # Resolve target → pyautogui → verify
+│   │   └── coordinate_transform.py # Pixel ↔ screen coords (Retina-aware)
+│   │
+│   ├── llm/                        # LLM integration
+│   │   ├── interface.py            # Send UIMap to LLM → get Actions
+│   │   ├── formatters.py           # UIMap + CursorState → structured text
+│   │   └── parsers.py              # LLM JSON response → list[Action]
+│   │
+│   ├── knowledge/                  # [V2] Optional manual-based enrichment
+│   │   ├── manual_parser.py
+│   │   ├── semantic_dict.py
+│   │   └── workflow_graph.py
+│   │
+│   ├── training/                   # Model training pipeline
+│   │   ├── collector.py            # Capture screenshots → dataset
+│   │   ├── dataset_prep.py         # Split train/val after annotation
+│   │   ├── trainer.py              # Ultralytics wrapper → pack packaging
+│   │   └── train_pack.py           # CLI: train → package → ApplicationPack
+│   │
 │   └── utils/
 │       ├── geometry.py             # Rect, Point, IoU
-│       └── timing.py              # FPS counter
-├── app_packs/                      # Hot-swappable application capability packs
-│   ├── app_a/
-│   │   ├── detector.mlpackage
-│   │   ├── screen_classifier.mlpackage
-│   │   ├── labels.yaml
-│   │   ├── semantics.yaml
-│   │   ├── workflows.yaml
-│   │   ├── targeting.yaml
-│   │   ├── verifier.yaml
-│   │   └── app_config.yaml
-│   └── virtel_terminal/
-│       └── ...
-├── datasets/                       # Per-application training data
-│   ├── app_a/
-│   │   ├── images/
-│   │   ├── labels/
-│   │   └── dataset.yaml
-│   └── virtel_terminal/
-│       └── ...
-├── configs/                        # YAML config files
+│       └── timing.py              # FPSCounter, Timer
+│
+├── packs/                          # Hot-swappable ApplicationPack artifacts
+│   └── <app_name>/
+│       ├── pack.yaml               # Pack metadata + labels + thresholds
+│       ├── model.pt                # Trained YOLO weights
+│       └── workflows/              # Optional workflow definitions
+│
+├── datasets/                       # Per-app training data (not committed)
+│   └── <app_name>/<session>/
+│       ├── images/{train,val}/
+│       ├── labels/{train,val}/
+│       └── dataset.yaml
+│
+├── configs/                        # YAML configuration files
 ├── scripts/
-│   ├── select_region.py            # Interactive region selection
-│   ├── benchmark.py                # Performance benchmarking
-│   └── visualize_detections.py     # Detection result visualization
+│   ├── benchmark.py                # M1 performance validation
+│   └── ruff-hook.sh                # Auto-format hook
+├── tests/                          # Unit tests (47 tests)
+├── docs/
+│   └── annotation-playbook.md      # Step-by-step training guide
 ├── pyproject.toml
-└── Makefile
+├── DESIGN.md                       # This file
+└── PRD.md                          # Product requirements
+```
+
+### Data Flow (types at each boundary)
+
+```
+ScreenCapture          → CapturedFrame (np.ndarray + timestamp)
+ChangeDetector         → ChangeResult (changed, level, dirty_rects)
+UIDetector             → list[Detection] (class_id, class_name, confidence, bbox)
+ElementTracker         → UIMap (dict[str, UIElement], immutable snapshot)
+CursorMonitor          → CursorState (position, current_element, dwell_time)
+LLMInterface           → list[Action] (type, target_element_id, text, keys)
+ActionExecutor         → list[ActionResult] (status, executed_at, screen_changed)
 ```
 
 ## Dependencies

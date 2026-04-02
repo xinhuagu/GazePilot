@@ -2,11 +2,11 @@
 
 ## Product Goal
 
-Enable AI-driven precise operation of professional applications running inside a VDI by combining a shared runtime with hot-swappable application packs that perceive UI elements from screen pixels alone — no accessibility API, no source code access, no OS-level hooks.
+Enable AI-driven precise operation of professional software interfaces presented through screen pixels by combining a shared runtime with hot-swappable application packs — no accessibility API, no source code access, no OS-level hooks.
 
 ## Target Users
 
-- **Primary**: Engineers/operators who need to automate repetitive workflows in a specific VDI-hosted Windows application that has no API and no scripting interface.
+- **Primary**: Engineers/operators who need to automate repetitive workflows in a specific software application that has no API and no scripting interface, whether it runs locally, inside VDI, or through another remote display surface.
 - **Secondary**: QA teams who need to regression-test the same application through its GUI.
 
 ## Core Use Cases
@@ -24,7 +24,7 @@ Enable AI-driven precise operation of professional applications running inside a
 ## Non-Goals (explicitly out of scope)
 
 - **General-purpose UI automation**: ScreenPilot is not Anthropic Computer Use. V1 ships one production-ready application pack and a runtime that can support more packs later, trading generality for precision.
-- **Cross-platform agent**: V1 is macOS-only (the machine that views the VDI). The VDI-hosted application can be any OS.
+- **Cross-platform agent**: V1 is macOS-only on the operator machine. The target application may run locally, inside VDI, or through another remote session, but cross-host automation parity is not a V1 goal.
 - **Model training infrastructure**: No cloud training pipeline. Training happens locally or on a single GPU machine. Ultralytics CLI is sufficient.
 - **Full product GUI / dashboard**: V1 does not ship a general-purpose desktop console or web dashboard. A lightweight training-sample collector UI is in scope.
 - **Recording and replaying macros**: ScreenPilot is not a macro recorder. The LLM reasons about each step, adapting to screen state.
@@ -33,9 +33,9 @@ Enable AI-driven precise operation of professional applications running inside a
 
 ### What V1 delivers
 
-A CLI tool with a shared runtime that supports **hot-swappable application packs**, shipping initially with **one production-ready pack for one specific VDI-hosted application**:
+A CLI tool with a shared runtime that supports **hot-swappable application packs**, shipping initially with **one production-ready pack for one specific target application**:
 
-1. Captures the VDI client window at ~20 FPS
+1. Captures the target application surface at ~20 FPS
 2. Identifies the active application/session and loads the matching `ApplicationPack`
 3. Detects screen changes and runs a custom-trained YOLO model only when needed
 4. Maintains a real-time UIMap of all detected elements (bounding boxes, classes, OCR text)
@@ -53,6 +53,10 @@ A CLI tool with a shared runtime that supports **hot-swappable application packs
 - Multi-app onboarding workflow beyond the first production pack
 - GUI / web dashboard (Future)
 - Windows/Linux host support (Future)
+
+### Launch Focus
+
+V1 is optimized first for **VDI-hosted professional Windows applications**, because that is the hardest high-value environment and exercises the most difficult constraints: compression artifacts, remote repaint delay, lack of APIs, and coordinate precision. The same runtime architecture is intended to support local desktop applications and other screen-presented software through pack-specific capture and interaction rules.
 
 ## Success Metrics
 
@@ -75,8 +79,8 @@ A CLI tool with a shared runtime that supports **hot-swappable application packs
 ## Functional Requirements
 
 ### FR1: Screen Capture
-- Capture a user-defined screen region (the VDI client window) at ≥ 20 FPS
-- Support auto-detection of VDI window by process name
+- Capture a user-defined screen region or target application window at ≥ 20 FPS
+- Support auto-detection of target window by process name or window name
 - Support manual region selection as fallback
 - Handle Retina (2x) displays correctly
 
@@ -141,14 +145,14 @@ A CLI tool with a shared runtime that supports **hot-swappable application packs
 - Configurable capture interval
 
 ### FR11: Collector UI
-- Provide a lightweight local UI for training-sample collection, optimized for use while the operator is actively working inside the VDI application
+- Provide a lightweight local UI for training-sample collection, optimized for use while the operator is actively working inside the target application
 - Let the user select the target window, pack name, and session name before collection starts
 - Provide `Start`, `Pause`, `Resume`, `Stop`, and `Discard` controls
 - Show live collection status: active window, capture mode, frame count, dedupe/skipped count, last-captured thumbnail, output path
 - Support multiple collection triggers: fixed interval, screen change, click-following capture, and manual hotkey capture
 - Let the user mark important screens, add short notes/tags, and flag sessions for immediate annotation
 - Offer one-click handoff to the labeling workflow by opening the output folder or launching Label Studio against the exported session
-- Stay small, always-on-top optional, and non-disruptive to VDI operation
+- Stay small, always-on-top optional, and non-disruptive to active software operation
 
 ### FR12: Model Training and Pack Packaging
 - Wrap Ultralytics training API with VDI-specific augmentations
@@ -159,7 +163,7 @@ A CLI tool with a shared runtime that supports **hot-swappable application packs
 
 ## Collector UI Concept
 
-V1 should ship a **small desktop collector controller**, not a full product shell. The UI exists to make data collection fast, safe, and obvious for non-developer operators.
+V1 should ship a **small desktop collector controller**, not a full product shell. The UI exists to make data collection fast, safe, and obvious for non-developer operators across VDI-hosted and local applications.
 
 ### Primary user flow
 
@@ -234,7 +238,7 @@ V1 should ship a **small desktop collector controller**, not a full product shel
 | Annotation tool | Label Studio | Open-source, supports model-assisted pre-labeling, YOLO export |
 | Collector UI toolkit | PySide6 | Collector UI is a local desktop control surface tightly coupled to Python capture/training code; avoiding a JS/Electron shell keeps the system single-runtime and simpler to ship |
 | Runtime packaging | `ApplicationPack` directory artifact | Clean boundary for hot-swappable per-app models, labels, workflows, and verifier rules |
-| Window detection | Quartz CGWindowList | Native macOS window enumeration; reliable foundation for routing/capture |
+| Window detection | Quartz CGWindowList | Native macOS window enumeration; reliable foundation for routing/capture across local and remote app surfaces |
 | Action execution baseline | pyautogui | Simple baseline for V1; upgrade path remains open if precision requires native events |
 | Configuration | YAML files | Human-readable, standard |
 | Dataset format | YOLO images/labels + `dataset.yaml` per pack | Matches Ultralytics training pipeline and keeps pack training isolated |
@@ -243,7 +247,7 @@ V1 should ship a **small desktop collector controller**, not a full product shel
 
 | Decision | Leaning | Alternative | Validation |
 |----------|---------|-------------|------------|
-| Screen capture | `mss` | ScreenCaptureKit via pyobjc | Benchmark both in Phase 1. mss is simpler; SCK is faster but harder from Python. Go with mss unless it can't hit 20 FPS for VDI window region. |
+| Screen capture | `mss` | ScreenCaptureKit via pyobjc | Benchmark both in Phase 1. mss is simpler; SCK is faster but harder from Python. Go with mss unless it can't hit 20 FPS for the target app window/region. |
 | Inference runtime | CoreML export | ONNX Runtime + CoreML EP | Export model to both formats, benchmark inference time. CoreML should be faster on ANE, but ONNX is more portable. |
 | OCR engine | PaddleOCR | EasyOCR, Tesseract | Test all three on VDI-compressed screenshots. Pick the one with best accuracy on small UI text. |
 | Pre-labeling | GroundingDINO | Manual-only or other zero-shot detectors | Validate pre-label quality and correction time on the first pack before treating it as standard workflow. |
@@ -292,12 +296,12 @@ Key architectural properties:
 ## Milestones
 
 ### M1: Capture + Change Detection (Week 1)
-**Deliverable**: CLI tool that captures VDI window at 20+ FPS, prints "CHANGED" / "UNCHANGED" per frame.
+**Deliverable**: CLI tool that captures the target application window/region at 20+ FPS, prints "CHANGED" / "UNCHANGED" per frame.
 - Screen capture module with mss
-- Window finder (auto-detect VDI client)
+- Window finder (auto-detect target app window)
 - Change detector (perceptual hash + SSIM)
 - Benchmark script proving ≥ 20 FPS capture, < 5ms change detection
-- **Exit criterion**: benchmark passes on actual VDI window
+- **Exit criterion**: benchmark passes on the first target application surface, with VDI as the initial focus environment
 
 ### M2: Runtime Pack Contract (Week 2)
 **Deliverable**: Shared runtime can identify the active app and load an `ApplicationPack` contract.
@@ -326,7 +330,7 @@ Key architectural properties:
 - **Exit criterion**: mAP@0.5 > 90% on validation set; visual inspection shows correct boxes
 
 ### M5: UIMap + Cursor Monitor (Week 5)
-**Deliverable**: Real-time terminal output showing "cursor is on [button] Save" as you move the mouse over the VDI window.
+**Deliverable**: Real-time terminal output showing "cursor is on [button] Save" as you move the mouse over the target application surface.
 - UIMap data structures
 - Element tracker (IoU matching, stability, hierarchy)
 - OCR integration for element text
@@ -359,13 +363,13 @@ Key architectural properties:
 |------|--------|------------|
 | VDI compression degrades detection accuracy below target | High | Aggressive augmentation during training; validate on real VDI screenshots early (M3/M4) |
 | Retina coordinate translation introduces systematic click offset | High | Build coordinate validation test in M5; compare expected vs actual click positions |
-| mss capture can't hit 20 FPS for VDI window on macOS | Medium | Benchmark in M1; fallback to ScreenCaptureKit if needed |
+| mss capture can't hit 20 FPS for the target window/region on macOS | Medium | Benchmark in M1; fallback to ScreenCaptureKit if needed |
 | GroundingDINO pre-annotation quality too low for target app | Medium | Test in M3; fallback to manual annotation |
 | Small UI elements (checkboxes, 12px icons) undetectable at 640px input | Medium | Train at 1024px input resolution; if still insufficient, go to 1280px |
 | LLM hallucinates actions or misidentifies elements | Medium | Pre-click verification, constrained action schema, dry_run testing before live execution |
 | Wrong pack routed for the active screen | Medium | Conservative router rules; fail closed unless pack match is confident |
 | OCR cost inflates latency | Medium | OCR only on cropped candidates; cache OCR for stable elements |
-| pyautogui click doesn't register in VDI client | Low | VDI clients accept OS-level input events; test in M1. Fallback: CGEvent |
+| pyautogui click doesn't register reliably in the target application surface | Low | Test in M1 on the initial target environment. Fallback: CGEvent |
 | Model overfits to current application theme/data | Low | Augmentation + periodic retraining as application updates |
 
 ### Open Questions

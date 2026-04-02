@@ -33,6 +33,12 @@ jobs:
           from screenpilot.training.collector import DataCollector
           from screenpilot.training.trainer import PackTrainer
           from screenpilot.training.dataset_prep import split_dataset
+          from screenpilot.tracker.ui_map import UIMap, UIElement, Detection, UIMapDiff
+          from screenpilot.tracker.element_tracker import ElementTracker
+          from screenpilot.actions.action_types import Action, ActionResult, ActionType
+          from screenpilot.actions.coordinate_transform import CoordinateTransform
+          from screenpilot.llm.formatters import format_state
+          from screenpilot.llm.parsers import parse_actions
           print('All imports OK')
           "
 
