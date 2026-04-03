@@ -38,6 +38,13 @@ def main(argv: list[str] | None = None) -> None:
     replay_p.add_argument("recording", help="Path to .jsonl recording file")
     replay_p.add_argument("--speed", type=float, default=1.0, help="Playback speed (2.0 = 2x)")
 
+    # --- learn ---
+    learn_p = sub.add_parser("learn", help="Click UI elements, VLM identifies them")
+    learn_p.add_argument("--window", type=str, help="Window name")
+    learn_p.add_argument("--region", type=str, help="Manual region: left,top,width,height")
+    learn_p.add_argument("--pack", type=str, required=True, help="Pack name (must have model)")
+    learn_p.add_argument("--packs-dir", type=str, default="packs")
+
     # --- collect ---
     collect_p = sub.add_parser("collect", help="Collect training screenshots")
     collect_p.add_argument("--window", type=str, help="Window name to capture")
@@ -114,6 +121,16 @@ def main(argv: list[str] | None = None) -> None:
             retina_scale=args.retina_scale,
             record=args.record,
             record_dir=args.record_dir,
+        )
+
+    elif args.command == "learn":
+        from gazefy.core.learner import run_learn
+
+        region = _resolve_region(args)
+        run_learn(
+            region=region,
+            pack_name=args.pack,
+            packs_dir=args.packs_dir,
         )
 
     elif args.command == "replay":
