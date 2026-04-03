@@ -80,7 +80,12 @@ def _ask_vlm(icon_b64: str, context_b64: str, element_class: str) -> str:
     except ImportError:
         raise RuntimeError("Install LLM extra: pip install gazefy[llm]")
 
-    client = anthropic.Anthropic()
+    from gazefy.llm.credentials import get_api_key
+
+    api_key = get_api_key()
+    if not api_key:
+        raise RuntimeError("No API key found. Need Claude Code login or ANTHROPIC_API_KEY env var.")
+    client = anthropic.Anthropic(api_key=api_key)
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=100,

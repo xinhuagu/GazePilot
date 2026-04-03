@@ -81,7 +81,12 @@ class LLMInterface:
             raise RuntimeError("Install llm extra: pip install gazefy[llm]")
 
         if self._client is None:
-            self._client = anthropic.Anthropic()
+            from gazefy.llm.credentials import get_api_key
+
+            api_key = get_api_key()
+            if not api_key:
+                raise RuntimeError("No API key found. Need Claude Code login or ANTHROPIC_API_KEY.")
+            self._client = anthropic.Anthropic(api_key=api_key)
 
         response = self._client.messages.create(
             model=self._model,
