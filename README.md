@@ -252,20 +252,6 @@ The five directions driving this:
 
 This is the "learn from doing" principle: the system gets better the more it operates, using its own action outcomes as the training signal.
 
-## Milestones
-
-| Milestone | Status | Description |
-|-----------|--------|-------------|
-| M1: Capture + Change Detection | ✅ Done | Screen capture, frame diffing, benchmark |
-| M2: Pack Contract + Training Pipeline | ✅ Done | ApplicationPack, collect/prep/train CLI |
-| M3: UIMap + Cursor Monitor | ✅ Done | IoU element tracking, 60 Hz cursor resolution |
-| M4: Action Execution + LLM | ✅ Done | pyautogui executor, Anthropic LLM interface |
-| M5: Recording + Annotation | ✅ Done | Semantic recorder, video pipeline, hybrid annotator |
-| M6: End-to-end Task Execution | 🔄 In progress | LLM→UIMap→Action orchestration loop |
-| M7: Hardening | Planned | Error recovery, multi-provider LLM, regression suite |
-| M8: Self-Improving Pipeline | 🔄 In progress | M8b AnnotationConverter ✅; M8c DriftMonitor, M8d ActiveLearner planned |
-| M9: LoRA Adapters (V2) | Research | Universal base model + per-app LoRA fine-tuning |
-
 ## License
 
 [Apache License 2.0](LICENSE)

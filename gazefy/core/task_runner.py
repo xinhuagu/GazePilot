@@ -61,9 +61,7 @@ class TaskResult:
             target = r.action.target_element_id or "(no target)"
             delta = f"  diff={r.diff_score:.2f}" if r.screen_changed else ""
             err = f"  [{r.error}]" if r.error else ""
-            lines.append(
-                f"  {i}. [{mark}] {r.action.type.value} -> {target}{delta}{err}"
-            )
+            lines.append(f"  {i}. [{mark}] {r.action.type.value} -> {target}{delta}{err}")
         return "\n".join(lines)
 
 
@@ -122,8 +120,7 @@ class TaskRunner:
         ui_map = self._wait_for_uimap()
         if ui_map.is_empty:
             logger.warning(
-                "UIMap empty after %.1fs — no elements detected. "
-                "Is the YOLO model loaded?",
+                "UIMap empty after %.1fs — no elements detected. Is the YOLO model loaded?",
                 self._uimap_timeout,
             )
             result.status = "failed"
