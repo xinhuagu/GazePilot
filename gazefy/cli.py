@@ -10,6 +10,9 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Gazefy: AI-driven screen automation")
     sub = parser.add_subparsers(dest="command")
 
+    # --- collector-ui ---
+    sub.add_parser("collector", help="Open the Gazefy Collector UI")
+
     # --- list-windows ---
     sub.add_parser("list-windows", help="List visible macOS windows")
 
@@ -57,7 +60,12 @@ def main(argv: list[str] | None = None) -> None:
 
     args = parser.parse_args(argv)
 
-    if args.command == "list-windows":
+    if args.command == "collector":
+        from gazefy.collector_ui.main_window import main as ui_main
+
+        ui_main()
+
+    elif args.command == "list-windows":
         from gazefy.capture.window_finder import print_windows
 
         print("Visible windows:")

@@ -1,7 +1,7 @@
 [project]
 name = "gazefy"
 version = "0.1.0"
-description = "Real-time screen monitoring and AI-driven automation for VDI-hosted applications"
+description = "AI-driven screen automation for any application. Train a neural network to perceive UI, then let an LLM operate it."
 requires-python = ">=3.11"
 license = "Apache-2.0"
 
@@ -39,6 +39,10 @@ knowledge = [
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
 ]
+# Collector UI
+ui = [
+    "PySide6>=6.7",
+]
 # Development tools
 dev = [
     "pytest>=8.0",
@@ -46,7 +50,7 @@ dev = [
 ]
 # Everything for local development on macOS
 all = [
-    "gazefy[platform,ml,llm,training,dev]",
+    "gazefy[platform,ml,llm,training,ui,dev]",
 ]
 
 [project.scripts]
