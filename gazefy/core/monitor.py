@@ -89,9 +89,14 @@ def run_monitor(
                     detections = orch.detector.detect(frame.image)
                     h, w = frame.image.shape[:2]
                     orch.tracker.update(detections, change, frame_width=w, frame_height=h)
-                    # Run twice on first detection to bootstrap stability
+                    # Bootstrap stability: feed same detections as MINOR to bump to stability=2
                     if detect_count == 0 and detections:
-                        orch.tracker.update(detections, change, frame_width=w, frame_height=h)
+                        from gazefy.capture.change_detector import ChangeLevel, ChangeResult
+
+                        bootstrap = ChangeResult(
+                            changed=True, change_level=ChangeLevel.MINOR
+                        )
+                        orch.tracker.update(detections, bootstrap, frame_width=w, frame_height=h)
                     orch.cursor.set_ui_map(orch.tracker.current_map)
                     detect_count += 1
                 fps.tick()
