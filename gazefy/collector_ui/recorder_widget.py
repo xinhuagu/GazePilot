@@ -69,7 +69,8 @@ class RecorderWidget(QMainWindow):
 
     def _init_ui(self) -> None:
         self.setWindowTitle("Gazefy Recorder")
-        self.setFixedSize(480, 140)
+        self.setMinimumSize(480, 140)
+        self.setMaximumWidth(600)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
 
         central = QWidget()
@@ -82,15 +83,33 @@ class RecorderWidget(QMainWindow):
         pack_row = QHBoxLayout()
         pack_row.addWidget(QLabel("Pack:"))
         self.pack_combo = QComboBox()
-        self.pack_combo.setMinimumWidth(140)
+        self.pack_combo.setMinimumWidth(120)
         pack_row.addWidget(self.pack_combo, 1)
         self.video_check = QCheckBox("Video mode")
         self.video_check.setToolTip(
-            "Record screen as MP4 + click events.\n"
-            "No YOLO model needed. Annotate semantics later with VLM."
+            "Record screen as MP4 + mouse events.\n"
+            "No YOLO model needed at record time.\n"
+            "Annotate semantics afterwards with the Annotate button."
         )
         pack_row.addWidget(self.video_check)
         layout.addLayout(pack_row)
+
+        # Annotator mode row (visible only in video mode)
+        ann_row = QHBoxLayout()
+        ann_row.addWidget(QLabel("Annotator:"))
+        self.detector_combo = QComboBox()
+        self.detector_combo.addItem("Hybrid: GroundingDINO + OCR + VLM", "grounding")
+        self.detector_combo.addItem("Full-frame VLM only", "none")
+        self.detector_combo.setToolTip(
+            "Hybrid (recommended): GroundingDINO detects precise bboxes, "
+            "EasyOCR reads text labels for free, Claude Vision only labels icons.\n\n"
+            "Full-frame VLM: sends entire screenshot to Claude (simpler, less precise bboxes)."
+        )
+        ann_row.addWidget(self.detector_combo, 1)
+        self._ann_row_widget = QWidget()
+        self._ann_row_widget.setLayout(ann_row)
+        self._ann_row_widget.setVisible(False)
+        layout.addWidget(self._ann_row_widget)
 
         # Controls row
         ctrl = QHBoxLayout()
@@ -218,8 +237,7 @@ class RecorderWidget(QMainWindow):
     # --- Actions ---
 
     def _on_video_mode_toggled(self, checked: bool) -> None:
-        # In video mode, YOLO model is optional
-        self.pack_combo.setEnabled(not checked or True)  # always enabled
+        self._ann_row_widget.setVisible(checked)
 
     def _on_start(self) -> None:
         if self._recording:
@@ -348,20 +366,32 @@ class RecorderWidget(QMainWindow):
 
         session_dir = self._video_session_dir
 
+        detector_mode = self.detector_combo.currentData()
+        pack_name = self.pack_combo.currentText()
+        pack_dir = (Path("packs") / pack_name) if pack_name != "(no model)" else None
+
         def run() -> None:
-            from gazefy.core.video_annotator import VideoAnnotator
-
-            annotator = VideoAnnotator()
-
             def on_progress(current: int, total: int, desc: str) -> None:
                 self._frame_update.emit(current, f"{current}/{total}  {desc}")
 
             try:
+                if detector_mode == "grounding":
+                    from gazefy.core.hybrid_annotator import HybridAnnotator
+                    annotator = HybridAnnotator(pack_dir=pack_dir)
+                else:
+                    from gazefy.core.video_annotator import VideoAnnotator
+                    annotator = VideoAnnotator()
+
                 annotations = annotator.annotate_session(session_dir, on_progress=on_progress)
                 total_elements = sum(len(a.elements) for a in annotations)
+                n_ocr = sum(
+                    sum(1 for e in a.elements if "ocr" in getattr(e, "source", "vlm"))
+                    for a in annotations
+                )
                 self._frame_update.emit(
                     len(annotations),
-                    f"Done: {len(annotations)} frames, {total_elements} elements total",
+                    f"Done: {len(annotations)} frames, {total_elements} elements "
+                    f"({n_ocr} OCR, {total_elements - n_ocr} VLM)",
                 )
             except Exception as e:
                 self._frame_update.emit(0, f"Annotation error: {e}")

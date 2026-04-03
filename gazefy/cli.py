@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> None:
     # --- annotate-video ---
     av_p = sub.add_parser(
         "annotate-video",
-        help="Annotate a video session with VLM: every key frame → ALL visible UI elements",
+        help="Annotate a video session: detector finds bboxes, OCR reads text, VLM labels icons",
     )
     av_p.add_argument("session_dir", help="Path to session directory (contains video.mp4 + events.jsonl)")
     av_p.add_argument(
@@ -58,6 +58,27 @@ def main(argv: list[str] | None = None) -> None:
         type=float,
         default=3.0,
         help="Also annotate every N seconds in addition to click frames (0 = clicks only)",
+    )
+    av_p.add_argument(
+        "--detector",
+        choices=["grounding", "none"],
+        default="grounding",
+        help=(
+            "grounding: GroundingDINO (precise bboxes) + EasyOCR + VLM for icons [default]. "
+            "none: send full frame to VLM (no local detector required)."
+        ),
+    )
+    av_p.add_argument(
+        "--pack",
+        type=str,
+        default="",
+        help="Use a trained YOLO pack instead of GroundingDINO (faster, higher precision)",
+    )
+    av_p.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help="Device for GroundingDINO: cpu | mps | cuda",
     )
 
     # --- learn ---
@@ -176,17 +197,34 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Annotate with: gazefy annotate-video {session_dir}")
 
     elif args.command == "annotate-video":
-        from gazefy.core.video_annotator import VideoAnnotator
-
         session_dir = Path(args.session_dir)
-        annotator = VideoAnnotator(sample_interval=args.interval)
 
         def on_progress(current: int, total: int, desc: str) -> None:
             print(f"  [{current}/{total}]  {desc}")
 
+        if args.detector == "grounding":
+            from gazefy.core.hybrid_annotator import HybridAnnotator
+
+            pack_dir = Path("packs") / args.pack if args.pack else None
+            annotator = HybridAnnotator(
+                sample_interval=args.interval,
+                grounding_device=args.device,
+                pack_dir=pack_dir,
+            )
+            mode_desc = (
+                f"YOLO ({args.pack}) + EasyOCR + VLM (icons)" if args.pack
+                else f"GroundingDINO + EasyOCR + VLM (icons)  device={args.device}"
+            )
+        else:
+            from gazefy.core.video_annotator import VideoAnnotator
+
+            annotator = VideoAnnotator(sample_interval=args.interval)
+            mode_desc = "full-frame VLM only (no local detector)"
+
         print(f"Annotating {session_dir}/")
-        print(f"  Sample interval: {args.interval}s  (0 = clicks only)")
-        print("  Sending frames to Claude Vision — each frame returns ALL visible UI elements.\n")
+        print(f"  Mode:     {mode_desc}")
+        print(f"  Interval: {args.interval}s  (0 = clicks only)\n")
+
         annotations = annotator.annotate_session(session_dir, on_progress=on_progress)
         total_el = sum(len(a.elements) for a in annotations)
         print(f"\nDone: {len(annotations)} frames annotated, {total_el} elements total")
