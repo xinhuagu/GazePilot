@@ -29,6 +29,13 @@ def main(argv: list[str] | None = None) -> None:
     monitor_p.add_argument("--pack", type=str, default="", help="Force a specific pack")
     monitor_p.add_argument("--packs-dir", type=str, default="packs")
     monitor_p.add_argument("--retina-scale", type=float, default=2.0)
+    monitor_p.add_argument("--record", action="store_true", help="Record cursor trajectory")
+    monitor_p.add_argument("--record-dir", type=str, default="recordings")
+
+    # --- replay ---
+    replay_p = sub.add_parser("replay", help="Replay a recorded cursor trajectory")
+    replay_p.add_argument("recording", help="Path to .jsonl recording file")
+    replay_p.add_argument("--speed", type=float, default=1.0, help="Playback speed (2.0 = 2x)")
 
     # --- collect ---
     collect_p = sub.add_parser("collect", help="Collect training screenshots")
@@ -99,7 +106,14 @@ def main(argv: list[str] | None = None) -> None:
             pack_name=args.pack,
             packs_dir=args.packs_dir,
             retina_scale=args.retina_scale,
+            record=args.record,
+            record_dir=args.record_dir,
         )
+
+    elif args.command == "replay":
+        from gazefy.core.monitor import run_replay
+
+        run_replay(args.recording, speed=args.speed)
 
     elif args.command == "collect":
         from gazefy.training.collector import run_collect

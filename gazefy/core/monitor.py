@@ -1,18 +1,19 @@
-"""Monitor mode: real-time terminal display of cursor-to-element state.
+"""Monitor mode: real-time cursor-to-element tracking with optional recording.
 
 Usage:
     gazefy monitor --window "Citrix"
-    gazefy monitor --pack my_erp --window "Citrix"
-
-Prints a live status line showing what UI element the cursor is hovering over,
-plus a periodic summary of all detected elements.
+    gazefy monitor --pack my_erp --window "Citrix" --record
+    gazefy replay recordings/session_xxx.jsonl
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import time
+from dataclasses import dataclass
+from pathlib import Path
 
 from gazefy.config import CaptureRegion, GazefyConfig
 from gazefy.core.orchestrator import Orchestrator
@@ -21,12 +22,26 @@ from gazefy.utils.timing import FPSCounter
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class RecordedFrame:
+    """One frame of recorded cursor trajectory."""
+
+    t: float  # Seconds since recording start
+    x: float  # Screen x
+    y: float  # Screen y
+    element_id: str = ""
+    element_class: str = ""
+    confidence: float = 0.0
+
+
 def run_monitor(
     region: CaptureRegion,
     pack_name: str = "",
     packs_dir: str = "packs",
     retina_scale: float = 2.0,
     show_all_interval: float = 5.0,
+    record: bool = False,
+    record_dir: str = "recordings",
 ) -> None:
     """Run monitor mode: live cursor-to-element tracking in terminal.
 
@@ -36,6 +51,8 @@ def run_monitor(
         packs_dir: Directory containing ApplicationPack artifacts.
         retina_scale: Retina display scale factor.
         show_all_interval: Seconds between full element list dumps.
+        record: If True, save cursor trajectory to a JSONL file.
+        record_dir: Directory for recording files.
     """
     config = GazefyConfig(
         region=region,
@@ -78,6 +95,15 @@ def run_monitor(
     last_element_id = ""
     last_full_dump = 0.0
     detect_count = 0
+    recording: list[RecordedFrame] = []
+    record_start = time.monotonic()
+    record_path: Path | None = None
+
+    if record:
+        rec_dir = Path(record_dir)
+        rec_dir.mkdir(parents=True, exist_ok=True)
+        record_path = rec_dir / f"session_{int(time.time())}.jsonl"
+        print(f"  Recording to: {record_path}")
 
     try:
         while True:
@@ -93,9 +119,7 @@ def run_monitor(
                     if detect_count == 0 and detections:
                         from gazefy.capture.change_detector import ChangeLevel, ChangeResult
 
-                        bootstrap = ChangeResult(
-                            changed=True, change_level=ChangeLevel.MINOR
-                        )
+                        bootstrap = ChangeResult(changed=True, change_level=ChangeLevel.MINOR)
                         orch.tracker.update(detections, bootstrap, frame_width=w, frame_height=h)
                     orch.cursor.set_ui_map(orch.tracker.current_map)
                     detect_count += 1
@@ -105,6 +129,19 @@ def run_monitor(
             state = orch.cursor.state
             ui_map = orch.tracker.current_map
             el = state.current_element
+
+            # --- Record ---
+            if record:
+                recording.append(
+                    RecordedFrame(
+                        t=time.monotonic() - record_start,
+                        x=state.screen_position.x,
+                        y=state.screen_position.y,
+                        element_id=el.id if el else "",
+                        element_class=el.class_name if el else "",
+                        confidence=el.confidence if el else 0.0,
+                    )
+                )
 
             # --- Live status line ---
             if el:
@@ -161,6 +198,88 @@ def run_monitor(
     finally:
         orch.shutdown()
         print(f"Session: {detect_count} detection cycles, {ui_map.element_count} final elements")
+        if record and recording and record_path:
+            with open(record_path, "w") as f:
+                for frame in recording:
+                    f.write(
+                        json.dumps(
+                            {
+                                "t": round(frame.t, 3),
+                                "x": round(frame.x),
+                                "y": round(frame.y),
+                                "element_id": frame.element_id,
+                                "element_class": frame.element_class,
+                                "confidence": round(frame.confidence, 3),
+                            }
+                        )
+                        + "\n"
+                    )
+            print(f"Recorded {len(recording)} frames to {record_path}")
+
+
+def run_replay(recording_path: str, speed: float = 1.0) -> None:
+    """Replay a recorded cursor trajectory.
+
+    Args:
+        recording_path: Path to a .jsonl recording file.
+        speed: Playback speed multiplier (2.0 = double speed).
+    """
+    try:
+        import pyautogui
+
+        pyautogui.FAILSAFE = False
+    except ImportError:
+        print("pyautogui required: pip install gazefy[platform]")
+        sys.exit(1)
+
+    path = Path(recording_path)
+    if not path.exists():
+        print(f"Recording not found: {path}")
+        sys.exit(1)
+
+    with open(path) as f:
+        frames = [json.loads(line) for line in f if line.strip()]
+
+    if not frames:
+        print("Empty recording.")
+        return
+
+    print(f"Replaying {len(frames)} frames from {path}")
+    print(f"  Speed: {speed}x")
+    print(f"  Duration: {frames[-1]['t']:.1f}s (original)")
+    print("  Press Ctrl+C to stop.\n")
+
+    last_element = ""
+    try:
+        for i, frame in enumerate(frames):
+            x, y = int(frame["x"]), int(frame["y"])
+            eid = frame.get("element_id", "")
+            ecls = frame.get("element_class", "")
+            conf = frame.get("confidence", 0)
+
+            # Skip corner positions (pyautogui failsafe)
+            if x <= 5 and y <= 5:
+                continue
+            pyautogui.moveTo(x, y, _pause=False)
+
+            # Print element transitions
+            if eid and eid != last_element:
+                last_element = eid
+                print(f"  → [{ecls}] {eid} conf={conf:.2f} at ({x},{y})")
+            elif not eid and last_element:
+                last_element = ""
+                print(f"  → (left element) at ({x},{y})")
+
+            # Wait for next frame
+            if i + 1 < len(frames):
+                dt = (frames[i + 1]["t"] - frame["t"]) / speed
+                if dt > 0:
+                    time.sleep(dt)
+
+    except KeyboardInterrupt:
+        print("\n\nReplay stopped.")
+
+    print(f"Replay complete: {len(frames)} frames")
 
 
 def _make_registry(packs_dir: str):
