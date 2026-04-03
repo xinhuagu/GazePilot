@@ -353,12 +353,16 @@ class RecorderWidget(QMainWindow):
 
             annotator = VideoAnnotator()
 
-            def on_progress(current: int, total: int, ann) -> None:
-                self._frame_update.emit(current, f"{current}/{total} → {ann.label} [{ann.element_class}]")
+            def on_progress(current: int, total: int, desc: str) -> None:
+                self._frame_update.emit(current, f"{current}/{total}  {desc}")
 
             try:
                 annotations = annotator.annotate_session(session_dir, on_progress=on_progress)
-                self._frame_update.emit(len(annotations), f"Done: {len(annotations)} annotations")
+                total_elements = sum(len(a.elements) for a in annotations)
+                self._frame_update.emit(
+                    len(annotations),
+                    f"Done: {len(annotations)} frames, {total_elements} elements total",
+                )
             except Exception as e:
                 self._frame_update.emit(0, f"Annotation error: {e}")
             finally:

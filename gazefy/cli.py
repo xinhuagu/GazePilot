@@ -49,9 +49,16 @@ def main(argv: list[str] | None = None) -> None:
 
     # --- annotate-video ---
     av_p = sub.add_parser(
-        "annotate-video", help="Annotate a video session with VLM (fills semantic labels)"
+        "annotate-video",
+        help="Annotate a video session with VLM: every key frame → ALL visible UI elements",
     )
     av_p.add_argument("session_dir", help="Path to session directory (contains video.mp4 + events.jsonl)")
+    av_p.add_argument(
+        "--interval",
+        type=float,
+        default=3.0,
+        help="Also annotate every N seconds in addition to click frames (0 = clicks only)",
+    )
 
     # --- learn ---
     learn_p = sub.add_parser("learn", help="Click UI elements, VLM identifies them")
@@ -172,15 +179,18 @@ def main(argv: list[str] | None = None) -> None:
         from gazefy.core.video_annotator import VideoAnnotator
 
         session_dir = Path(args.session_dir)
-        annotator = VideoAnnotator()
+        annotator = VideoAnnotator(sample_interval=args.interval)
 
-        def on_progress(current: int, total: int, ann) -> None:
-            print(f"  [{current}/{total}] t={ann.t:.1f}s → {ann.label!r} [{ann.element_class}]")
+        def on_progress(current: int, total: int, desc: str) -> None:
+            print(f"  [{current}/{total}]  {desc}")
 
         print(f"Annotating {session_dir}/")
-        print("  Sending click frames to Claude Vision...\n")
+        print(f"  Sample interval: {args.interval}s  (0 = clicks only)")
+        print("  Sending frames to Claude Vision — each frame returns ALL visible UI elements.\n")
         annotations = annotator.annotate_session(session_dir, on_progress=on_progress)
-        print(f"\nDone: {len(annotations)} annotations → {session_dir}/annotations.jsonl")
+        total_el = sum(len(a.elements) for a in annotations)
+        print(f"\nDone: {len(annotations)} frames annotated, {total_el} elements total")
+        print(f"  → {session_dir}/annotations.jsonl")
 
     elif args.command == "learn":
         from gazefy.core.learner import run_learn

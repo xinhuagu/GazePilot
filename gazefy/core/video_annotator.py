@@ -1,14 +1,33 @@
-"""Annotate a recorded video session using VLM analysis.
+"""Annotate a recorded video session using VLM full-frame analysis.
 
-For each click event in events.jsonl:
-  1. Seek to the nearest video frame at click time t
-  2. Crop around the click position (with red crosshair overlay)
-  3. Send to Claude Vision to identify the UI element
-  4. Write results to annotations.jsonl
+For each key frame (every click + periodic interval):
+  1. Seek to the nearest video frame at time t
+  2. Overlay the mouse cursor position as a red dot
+  3. Send the full screenshot (resized) to Claude Vision
+  4. Claude identifies ALL visible UI elements (buttons, menus, icons, ...)
+     and returns their labels, classes, and approximate bounding boxes
+  5. Write one rich annotation record per frame to annotations.jsonl
+
+Output format (one JSON object per line in annotations.jsonl):
+    {
+        "t": 1.23,
+        "mouse_x": 452,
+        "mouse_y": 310,
+        "action": "click_left",     // or null for periodic samples
+        "elements": [
+            {"label": "File Menu",   "class": "menu",   "bbox": [10, 5, 50, 25]},
+            {"label": "Brush Tool",  "class": "icon",   "bbox": [5, 70, 45, 100]},
+            ...
+        ]
+    }
 
 Usage:
     annotator = VideoAnnotator()
-    annotations = annotator.annotate_session(Path("recordings/session_xxx"))
+    annotator.annotate_session(
+        Path("recordings/session_xxx"),
+        sample_interval=3.0,       # also annotate every 3 s
+        on_progress=my_callback,
+    )
 """
 
 from __future__ import annotations
@@ -16,43 +35,81 @@ from __future__ import annotations
 import base64
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
 
+# ---------------------------------------------------------------------------
+# Data models
+# ---------------------------------------------------------------------------
+
 @dataclass
-class Annotation:
-    t: float
-    x: int
-    y: int
-    click: str
+class UIElement:
     label: str
     element_class: str
+    bbox: list[int]  # [x1, y1, x2, y2] in original frame pixels
 
+
+@dataclass
+class FrameAnnotation:
+    t: float
+    mouse_x: int
+    mouse_y: int
+    action: str | None  # "click_left", "click_right", or None
+    elements: list[UIElement] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "t": self.t,
+            "mouse_x": self.mouse_x,
+            "mouse_y": self.mouse_y,
+            "action": self.action,
+            "elements": [asdict(e) for e in self.elements],
+        }
+
+
+# ---------------------------------------------------------------------------
+# Annotator
+# ---------------------------------------------------------------------------
 
 class VideoAnnotator:
-    """Annotates click events in a recording session using Claude Vision."""
+    """Annotates a recording session: for each key frame, identifies all
+    visible UI elements using Claude Vision.
 
-    def __init__(self, crop_size: int = 200, context_size: int = 450):
-        self.crop_size = crop_size
-        self.context_size = context_size
+    Key frames = all click events + periodic samples every sample_interval seconds.
+    """
+
+    # Max width to send to VLM (resize for speed; bboxes are scaled back)
+    _MAX_VLM_WIDTH = 1280
+
+    def __init__(self, sample_interval: float = 3.0):
+        """
+        Args:
+            sample_interval: Annotate a frame every this many seconds in addition
+                             to click frames. Set to 0 to only annotate click frames.
+        """
+        self.sample_interval = sample_interval
 
     def annotate_session(
         self,
         session_dir: Path,
-        on_progress: Callable[[int, int, Annotation], None] | None = None,
-    ) -> list[Annotation]:
-        """Annotate all clicks in a session directory.
+        sample_interval: float | None = None,
+        on_progress: Callable[[int, int, str], None] | None = None,
+    ) -> list[FrameAnnotation]:
+        """Annotate all key frames in a session directory.
 
         Args:
-            session_dir: Path to session directory (must contain video.mp4 + events.jsonl).
-            on_progress: Optional callback(current, total, annotation) for UI updates.
+            session_dir: Path containing video.mp4 + events.jsonl.
+            sample_interval: Override instance default.
+            on_progress: Callback(current, total, description).
 
         Returns:
-            List of Annotation dataclasses, also written to annotations.jsonl.
+            List of FrameAnnotation, also written to annotations.jsonl.
         """
         import cv2
+
+        interval = sample_interval if sample_interval is not None else self.sample_interval
 
         events_path = session_dir / "events.jsonl"
         video_path = session_dir / "video.mp4"
@@ -66,10 +123,6 @@ class VideoAnnotator:
         with open(events_path) as f:
             events = [json.loads(line) for line in f if line.strip()]
 
-        clicks = [e for e in events if e.get("click")]
-        if not clicks:
-            return []
-
         frame_times: list[float] = []
         if frame_times_path.exists():
             frame_times = json.loads(frame_times_path.read_text())
@@ -77,48 +130,118 @@ class VideoAnnotator:
         cap = cv2.VideoCapture(str(video_path))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS) or 10.0
+        duration = frame_times[-1] if frame_times else (total_frames / fps)
 
-        annotations: list[Annotation] = []
+        key_frames = self._select_key_frames(events, duration, interval)
+
+        annotations: list[FrameAnnotation] = []
         try:
-            for i, click in enumerate(clicks):
-                frame = self._get_frame_at_time(
-                    cap, click["t"], fps, frame_times, total_frames
-                )
+            for i, kf in enumerate(key_frames):
+                t = kf["t"]
+                mouse_x = kf["mouse_x"]
+                mouse_y = kf["mouse_y"]
+                action = kf.get("action")
+
+                if on_progress:
+                    action_str = action or "scan"
+                    on_progress(i + 1, len(key_frames), f"t={t:.1f}s  {action_str}  ({mouse_x},{mouse_y})")
+
+                frame = self._get_frame_at_time(cap, t, fps, frame_times, total_frames)
                 if frame is None:
                     continue
 
-                x, y = click["x"], click["y"]
-                icon_b64 = self._crop_b64(frame, x, y, self.crop_size)
-                context_b64 = self._crop_b64(frame, x, y, self.context_size)
+                # Draw cursor on frame copy
+                vis = self._draw_cursor(frame, mouse_x, mouse_y, action)
+
+                # Resize for VLM, remember scale
+                vis_small, scale = self._resize_for_vlm(vis)
+                frame_b64 = self._to_b64(vis_small)
+
+                orig_h, orig_w = frame.shape[:2]
 
                 try:
-                    label, el_class = self._ask_vlm(icon_b64, context_b64)
+                    elements = self._ask_vlm(frame_b64, mouse_x, mouse_y, action, orig_w, orig_h, scale)
                 except Exception as e:
-                    label, el_class = f"error: {e}", "unknown"
+                    elements = [UIElement(label=f"VLM error: {e}", element_class="other", bbox=[0, 0, orig_w, orig_h])]
 
-                ann = Annotation(
-                    t=click["t"],
-                    x=x,
-                    y=y,
-                    click=click["click"],
-                    label=label,
-                    element_class=el_class,
-                )
+                ann = FrameAnnotation(t=t, mouse_x=mouse_x, mouse_y=mouse_y, action=action, elements=elements)
                 annotations.append(ann)
 
                 if on_progress:
-                    on_progress(i + 1, len(clicks), ann)
+                    on_progress(i + 1, len(key_frames), f"t={t:.1f}s → {len(elements)} elements")
         finally:
             cap.release()
 
         ann_path = session_dir / "annotations.jsonl"
         with open(ann_path, "w") as f:
             for ann in annotations:
-                f.write(json.dumps(asdict(ann)) + "\n")
+                f.write(json.dumps(ann.to_dict()) + "\n")
 
         return annotations
 
-    # --- helpers ---
+    # --- key frame selection ---
+
+    def _select_key_frames(
+        self, events: list[dict], duration: float, interval: float
+    ) -> list[dict]:
+        """Build list of {t, mouse_x, mouse_y, action?} to annotate.
+
+        Includes:
+        - All click events
+        - Periodic samples every `interval` seconds (if interval > 0)
+
+        Mouse position for non-click frames is interpolated from move events.
+        Frames closer than 0.5 s to each other are deduplicated.
+        """
+        # Build a sorted list of (t, x, y) from all events for interpolation
+        positions: list[tuple[float, int, int]] = [
+            (e["t"], e["x"], e["y"]) for e in events
+        ]
+        positions.sort()
+
+        def mouse_at(t: float) -> tuple[int, int]:
+            if not positions:
+                return 0, 0
+            # Find nearest position
+            best = min(positions, key=lambda p: abs(p[0] - t))
+            return best[1], best[2]
+
+        candidates: list[dict] = []
+
+        # Periodic samples
+        if interval > 0 and duration > 0:
+            t = 0.0
+            while t <= duration:
+                mx, my = mouse_at(t)
+                candidates.append({"t": round(t, 2), "mouse_x": mx, "mouse_y": my})
+                t += interval
+
+        # Click events always included
+        for ev in events:
+            if ev.get("click"):
+                btn = f"click_{ev['click']}"
+                candidates.append({
+                    "t": ev["t"],
+                    "mouse_x": ev["x"],
+                    "mouse_y": ev["y"],
+                    "action": btn,
+                })
+
+        # Sort by time
+        candidates.sort(key=lambda c: c["t"])
+
+        # Deduplicate: skip frames within 0.5 s of a previous one
+        # but always keep clicks even if close
+        result: list[dict] = []
+        last_t = -999.0
+        for c in candidates:
+            if c.get("action") or (c["t"] - last_t >= 0.5):
+                result.append(c)
+                last_t = c["t"]
+
+        return result
+
+    # --- video helpers ---
 
     def _get_frame_at_time(
         self,
@@ -128,7 +251,6 @@ class VideoAnnotator:
         frame_times: list[float],
         total_frames: int,
     ):
-        """Extract the video frame closest to time t."""
         import cv2
 
         if frame_times:
@@ -141,24 +263,56 @@ class VideoAnnotator:
         ret, frame = cap.read()
         return frame if ret else None
 
-    def _crop_b64(self, frame, cx: int, cy: int, size: int) -> str:
-        """Crop a square region centred on (cx, cy), draw a red crosshair, return base64 PNG."""
+    def _draw_cursor(self, frame, mx: int, my: int, action: str | None):
+        """Draw a cursor marker on a copy of frame."""
+        import cv2
+
+        vis = frame.copy()
+        h, w = vis.shape[:2]
+        mx = max(0, min(mx, w - 1))
+        my = max(0, min(my, h - 1))
+
+        if action:  # click: red filled circle + ring
+            cv2.circle(vis, (mx, my), 14, (0, 0, 255), 2)
+            cv2.circle(vis, (mx, my), 5, (0, 0, 255), -1)
+        else:  # move: small green dot
+            cv2.circle(vis, (mx, my), 6, (0, 200, 0), -1)
+            cv2.circle(vis, (mx, my), 6, (255, 255, 255), 1)
+
+        return vis
+
+    def _resize_for_vlm(self, frame) -> tuple:
+        """Resize frame so width <= _MAX_VLM_WIDTH. Returns (resized, scale)."""
         import cv2
 
         h, w = frame.shape[:2]
-        half = size // 2
-        x1 = max(0, cx - half)
-        y1 = max(0, cy - half)
-        x2 = min(w, cx + half)
-        y2 = min(h, cy + half)
-        crop = frame[y1:y2, x1:x2].copy()
-        rx, ry = cx - x1, cy - y1
-        cv2.drawMarker(crop, (rx, ry), (0, 0, 255), cv2.MARKER_CROSS, 24, 2)
-        _, buf = cv2.imencode(".png", crop)
+        if w <= self._MAX_VLM_WIDTH:
+            return frame, 1.0
+        scale = self._MAX_VLM_WIDTH / w
+        new_w = self._MAX_VLM_WIDTH
+        new_h = int(h * scale)
+        resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        return resized, scale
+
+    def _to_b64(self, frame) -> str:
+        import cv2
+
+        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         return base64.standard_b64encode(buf).decode()
 
-    def _ask_vlm(self, icon_b64: str, context_b64: str) -> tuple[str, str]:
-        """Send two crops to Claude Vision, return (label, element_class)."""
+    # --- VLM ---
+
+    def _ask_vlm(
+        self,
+        frame_b64: str,
+        mouse_x: int,
+        mouse_y: int,
+        action: str | None,
+        orig_w: int,
+        orig_h: int,
+        scale: float,
+    ) -> list[UIElement]:
+        """Send a full frame to Claude Vision; return all detected UI elements."""
         try:
             import anthropic
         except ImportError:
@@ -170,50 +324,84 @@ class VideoAnnotator:
         if not api_key:
             raise RuntimeError("No API key. Set ANTHROPIC_API_KEY or use Claude Code login.")
 
+        vlm_w = int(orig_w * scale)
+        vlm_h = int(orig_h * scale)
+        vlm_mx = int(mouse_x * scale)
+        vlm_my = int(mouse_y * scale)
+
+        if action:
+            cursor_desc = (
+                f"The user performed **{action}** at pixel ({mouse_x}, {mouse_y}) "
+                f"(marked with a red circle in the image)."
+            )
+        else:
+            cursor_desc = (
+                f"The mouse cursor is at pixel ({mouse_x}, {mouse_y}) "
+                f"(marked with a green dot in the image)."
+            )
+
+        prompt = f"""This is a screenshot of a desktop application.
+Image size: {vlm_w}×{vlm_h} px (original: {orig_w}×{orig_h} px).
+{cursor_desc}
+
+Identify ALL visible interactive UI elements: buttons, menus, menu items, icons, toolbars, input fields, checkboxes, tabs, dropdowns, scrollbars, labels, etc.
+
+For each element provide:
+- "label": short descriptive name, e.g. "File Menu", "Save Button", "Brush Tool", "Opacity Slider"
+- "class": one of button | menu | menu_item | icon | toolbar | input | checkbox | tab | dropdown | scrollbar | text | canvas | other
+- "bbox": [x1, y1, x2, y2] in the **original** image pixels ({orig_w}×{orig_h})
+
+Reply with JSON only, no explanation:
+{{"elements": [{{"label": "...", "class": "...", "bbox": [x1, y1, x2, y2]}}, ...]}}"""
+
         client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=150,
+            max_tokens=4096,
             messages=[
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "text",
-                            "text": (
-                                "A user clicked a UI element in a desktop application. "
-                                "The red crosshair marks the exact click position.\n\n"
-                                "First image: close-up around the click.\n"
-                                "Second image: wider context.\n\n"
-                                "Reply with JSON only:\n"
-                                '{"label": "Save Button", "class": "button"}\n\n'
-                                "Valid classes: button, menu, input, checkbox, icon, "
-                                "tab, dropdown, text, scrollbar, other"
-                            ),
-                        },
+                        {"type": "text", "text": prompt},
                         {
                             "type": "image",
                             "source": {
                                 "type": "base64",
-                                "media_type": "image/png",
-                                "data": icon_b64,
-                            },
-                        },
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": context_b64,
+                                "media_type": "image/jpeg",
+                                "data": frame_b64,
                             },
                         },
                     ],
                 }
             ],
         )
+
         text = response.content[0].text.strip()
+        return self._parse_elements(text, orig_w, orig_h)
+
+    def _parse_elements(self, text: str, orig_w: int, orig_h: int) -> list[UIElement]:
+        """Parse VLM JSON response into UIElement list."""
         m = re.search(r"\{.*\}", text, re.DOTALL)
-        if m:
+        if not m:
+            return []
+        try:
             data = json.loads(m.group())
-            return data.get("label", "Unknown"), data.get("class", "button")
-        return text, "button"
+        except json.JSONDecodeError:
+            return []
+
+        elements = []
+        for item in data.get("elements", []):
+            bbox = item.get("bbox", [0, 0, orig_w, orig_h])
+            if len(bbox) != 4:
+                continue
+            # Clamp to frame bounds
+            x1 = max(0, min(int(bbox[0]), orig_w))
+            y1 = max(0, min(int(bbox[1]), orig_h))
+            x2 = max(0, min(int(bbox[2]), orig_w))
+            y2 = max(0, min(int(bbox[3]), orig_h))
+            elements.append(UIElement(
+                label=str(item.get("label", "Unknown")),
+                element_class=str(item.get("class", "other")),
+                bbox=[x1, y1, x2, y2],
+            ))
+        return elements
