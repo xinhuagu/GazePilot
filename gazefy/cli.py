@@ -12,6 +12,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # --- collector-ui ---
     sub.add_parser("collector", help="Open the Gazefy Collector UI")
+    sub.add_parser("recorder", help="Open the floating Recorder widget")
 
     # --- list-windows ---
     sub.add_parser("list-windows", help="List visible macOS windows")
@@ -74,6 +75,11 @@ def main(argv: list[str] | None = None) -> None:
         from gazefy.collector_ui.main_window import main as ui_main
 
         ui_main()
+
+    elif args.command == "recorder":
+        from gazefy.collector_ui.recorder_widget import main as rec_main
+
+        rec_main()
 
     elif args.command == "list-windows":
         from gazefy.capture.window_finder import print_windows
