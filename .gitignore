@@ -67,3 +67,6 @@ htmlcov/
 
 # ruff
 .ruff_cache/
+datasets/
+packs/
+*.pt

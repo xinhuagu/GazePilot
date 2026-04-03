@@ -58,13 +58,20 @@ def list_windows(*, include_offscreen: bool = False) -> list[WindowInfo]:
 
 
 def find_window(name: str) -> WindowInfo | None:
-    """Find the largest window matching name substring on owner_name or window_name."""
+    """Find the best window matching name substring.
+
+    Prefers owner_name matches (actual application) over window_name matches
+    (could be a browser tab showing the same name). Among matches, picks largest.
+    """
     name_lower = name.lower()
-    matches = [
-        w
-        for w in list_windows()
-        if name_lower in w.owner_name.lower() or name_lower in w.window_name.lower()
+    all_windows = list_windows()
+
+    # Prefer owner_name match (e.g. process "gimp" not Chrome tab titled "GIMP")
+    owner_matches = [w for w in all_windows if name_lower in w.owner_name.lower()]
+    title_matches = [
+        w for w in all_windows if name_lower in w.window_name.lower() and w not in owner_matches
     ]
+    matches = owner_matches or title_matches
     if not matches:
         return None
     # Pick the largest window (by area) — avoids grabbing tiny tab bars or toolbars

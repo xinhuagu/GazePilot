@@ -44,7 +44,9 @@ def run_monitor(
     )
 
     orch = Orchestrator(config)
-    orch.registry = _make_registry(packs_dir)
+    registry = _make_registry(packs_dir)
+    orch.registry = registry
+    orch.router = _make_router(registry)
 
     # Force pack if specified
     if pack_name:
@@ -87,6 +89,9 @@ def run_monitor(
                     detections = orch.detector.detect(frame.image)
                     h, w = frame.image.shape[:2]
                     orch.tracker.update(detections, change, frame_width=w, frame_height=h)
+                    # Run twice on first detection to bootstrap stability
+                    if detect_count == 0 and detections:
+                        orch.tracker.update(detections, change, frame_width=w, frame_height=h)
                     orch.cursor.set_ui_map(orch.tracker.current_map)
                     detect_count += 1
                 fps.tick()
@@ -157,3 +162,9 @@ def _make_registry(packs_dir: str):
     from gazefy.core.model_registry import ModelRegistry
 
     return ModelRegistry(packs_dir=packs_dir)
+
+
+def _make_router(registry):
+    from gazefy.core.app_router import AppRouter
+
+    return AppRouter(registry)

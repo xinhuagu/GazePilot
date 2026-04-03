@@ -53,6 +53,12 @@ class UIDetector:
         if self._model is None:
             raise RuntimeError("Call load_model() first")
 
+        # Convert BGRA → BGR (YOLO expects 3 channels)
+        if frame.shape[2] == 4:
+            import cv2
+
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+
         meta = self._pack.metadata
         results = self._model.predict(
             frame,
