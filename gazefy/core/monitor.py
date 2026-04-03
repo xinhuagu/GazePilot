@@ -260,7 +260,16 @@ def run_replay(recording_path: str, speed: float = 1.0) -> None:
             # Skip corner positions (pyautogui failsafe)
             if x <= 5 and y <= 5:
                 continue
-            pyautogui.moveTo(x, y, _pause=False)
+
+            click = frame.get("click", "")
+            if click:
+                if click == "right":
+                    pyautogui.rightClick(x, y, _pause=False)
+                else:
+                    pyautogui.click(x, y, _pause=False)
+                print(f"  CLICK {click} at ({x},{y})")
+            else:
+                pyautogui.moveTo(x, y, _pause=False)
 
             # Print element transitions
             if eid and eid != last_element:

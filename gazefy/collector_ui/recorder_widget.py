@@ -169,8 +169,29 @@ class RecorderWidget(QMainWindow):
             import pyautogui
 
             pyautogui.FAILSAFE = False
+            from pynput import mouse
         except ImportError:
             return
+
+        # Click listener runs in its own thread via pynput
+        def on_click(x, y, button, pressed):
+            if not self._recording:
+                return False
+            if pressed:
+                t = time.monotonic() - self._record_start
+                btn = "left" if button == mouse.Button.left else "right"
+                self._frames.append(
+                    {
+                        "t": round(t, 3),
+                        "x": int(x),
+                        "y": int(y),
+                        "click": btn,
+                    }
+                )
+                self._frame_update.emit(len(self._frames), f"CLICK {btn} ({int(x)}, {int(y)})")
+
+        listener = mouse.Listener(on_click=on_click)
+        listener.start()
 
         while self._recording:
             x, y = pyautogui.position()
@@ -179,6 +200,8 @@ class RecorderWidget(QMainWindow):
             self._frames.append(frame)
             self._frame_update.emit(len(self._frames), f"({x}, {y})")
             time.sleep(0.05)
+
+        listener.stop()
 
     def _replay_loop(self) -> None:
         try:
@@ -194,8 +217,17 @@ class RecorderWidget(QMainWindow):
             x, y = int(frame["x"]), int(frame["y"])
             if x <= 5 and y <= 5:
                 continue
-            pyautogui.moveTo(x, y, _pause=False)
-            self._frame_update.emit(i + 1, f"({x}, {y})")
+
+            click = frame.get("click", "")
+            if click:
+                if click == "right":
+                    pyautogui.rightClick(x, y, _pause=False)
+                else:
+                    pyautogui.click(x, y, _pause=False)
+                self._frame_update.emit(i + 1, f"CLICK {click} ({x}, {y})")
+            else:
+                pyautogui.moveTo(x, y, _pause=False)
+                self._frame_update.emit(i + 1, f"({x}, {y})")
 
             if i + 1 < len(self._frames):
                 dt = self._frames[i + 1]["t"] - frame["t"]
