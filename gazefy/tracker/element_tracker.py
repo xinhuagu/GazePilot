@@ -37,7 +37,8 @@ class ElementTracker:
         self._current_map = UIMap()
         self._generation = 0
         self._next_id = 0
-        # Mutable tracking state (stability counters, last-seen frame)
+        # Mutable tracking state
+        self._all_elements: dict[str, UIElement] = {}  # ALL tracked (incl. unstable)
         self._stability: dict[str, int] = {}  # element_id → consecutive frames
         self._last_seen: dict[str, int] = {}  # element_id → generation when last detected
 
@@ -73,24 +74,30 @@ class ElementTracker:
     def _full_rebuild(self, detections: list[Detection], w: int, h: int) -> UIMapDiff:
         """Major change: discard old map, build fresh from detections."""
         old_ids = set(self._current_map.elements.keys())
+        self._all_elements.clear()
         self._stability.clear()
         self._last_seen.clear()
 
-        elements = {}
         for det in detections:
             eid = self._make_id(det.class_name)
-            elements[eid] = self._det_to_element(eid, det)
+            self._all_elements[eid] = self._det_to_element(eid, det)
             self._stability[eid] = 1
             self._last_seen[eid] = self._generation
 
+        # Apply stability filter
+        published = {
+            eid: el
+            for eid, el in self._all_elements.items()
+            if self._stability.get(eid, 0) >= self._min_stability
+        }
         self._current_map = UIMap(
-            elements=elements,
+            elements=published,
             frame_width=w,
             frame_height=h,
             generation=self._generation,
             timestamp=time.monotonic(),
         )
-        new_ids = set(elements.keys())
+        new_ids = set(published.keys())
         return UIMapDiff(
             added=sorted(new_ids),
             removed=sorted(old_ids),
@@ -98,17 +105,16 @@ class ElementTracker:
         )
 
     def _incremental_update(self, detections: list[Detection], w: int, h: int) -> UIMapDiff:
-        """Minor change: match detections to existing elements by IoU."""
-        old_elements = dict(self._current_map.elements)
+        """Minor change: match detections to ALL tracked elements by IoU."""
+        # Match against _all_elements (includes unstable), not just published map
+        candidates = dict(self._all_elements)
         matched_old: set[str] = set()
-        matched_det: set[int] = set()
-        new_elements: dict[str, UIElement] = {}
+        updated: dict[str, UIElement] = {}
         added: list[str] = []
 
-        # Match each detection to the best existing element
         for i, det in enumerate(detections):
             best_id, best_iou = "", 0.0
-            for eid, el in old_elements.items():
+            for eid, el in candidates.items():
                 if eid in matched_old:
                     continue
                 if el.class_name != det.class_name:
@@ -119,24 +125,21 @@ class ElementTracker:
                     best_id = eid
 
             if best_iou >= self._iou_threshold and best_id:
-                # Existing element — update it, increment stability
                 matched_old.add(best_id)
-                matched_det.add(i)
                 stab = self._stability.get(best_id, 0) + 1
                 self._stability[best_id] = stab
                 self._last_seen[best_id] = self._generation
-                new_elements[best_id] = self._det_to_element(best_id, det, stability=stab)
+                updated[best_id] = self._det_to_element(best_id, det, stability=stab)
             else:
-                # New element
                 eid = self._make_id(det.class_name)
                 self._stability[eid] = 1
                 self._last_seen[eid] = self._generation
-                new_elements[eid] = self._det_to_element(eid, det)
+                updated[eid] = self._det_to_element(eid, det)
                 added.append(eid)
 
-        # Keep old elements that weren't matched (may be stale)
+        # Keep unmatched elements (may be stale)
         removed: list[str] = []
-        for eid, el in old_elements.items():
+        for eid, el in candidates.items():
             if eid in matched_old:
                 continue
             frames_since = self._generation - self._last_seen.get(eid, 0)
@@ -145,12 +148,14 @@ class ElementTracker:
                 self._stability.pop(eid, None)
                 self._last_seen.pop(eid, None)
             else:
-                new_elements[eid] = el  # Keep but don't update
+                updated[eid] = el
+
+        self._all_elements = updated
 
         # Apply stability filter — only publish elements seen enough times
         published = {
             eid: el
-            for eid, el in new_elements.items()
+            for eid, el in self._all_elements.items()
             if self._stability.get(eid, 0) >= self._min_stability
         }
 
