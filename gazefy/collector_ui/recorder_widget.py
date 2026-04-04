@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
 
 
 class RecorderWidget(QMainWindow):
-    """Compact floating window for semantic recording."""
+    """Compact floating window for semantic recording + auto icon labeling."""
 
     _frame_update = Signal(int, str)
 
@@ -57,6 +57,10 @@ class RecorderWidget(QMainWindow):
         self._ocr = None
         self._tracker = None
         self._ui_map = None
+        self._pack_name = ""
+        # Icon labels dictionary (auto-learn on click)
+        self._icon_labels: dict = {}
+        self._last_frame: object = None  # numpy array for VLM cropping
         # Video mode
         self._video_recorder = None
         self._video_session_dir: Path | None = None
@@ -168,9 +172,9 @@ class RecorderWidget(QMainWindow):
                     self.pack_combo.addItem(p.name)
 
     def _load_pipeline(self) -> bool:
-        """Load YOLO detector + OCR for the selected pack."""
-        pack_name = self.pack_combo.currentText()
-        if pack_name == "(no model)":
+        """Load YOLO detector + OCR + icon labels for the selected pack."""
+        self._pack_name = self.pack_combo.currentText()
+        if self._pack_name == "(no model)":
             return False
         try:
             from gazefy.core.application_pack import ApplicationPack
@@ -178,11 +182,15 @@ class RecorderWidget(QMainWindow):
             from gazefy.detection.ocr import ElementOCR
             from gazefy.tracker.element_tracker import ElementTracker
 
-            pack = ApplicationPack.load(f"packs/{pack_name}")
+            pack = ApplicationPack.load(f"packs/{self._pack_name}")
             self._detector = UIDetector(pack)
             self._detector.load_model()
             self._ocr = ElementOCR()
             self._tracker = ElementTracker(min_stability=1)
+            # Load existing icon labels
+            labels_path = Path(f"packs/{self._pack_name}/icon_labels.json")
+            if labels_path.exists():
+                self._icon_labels = json.loads(labels_path.read_text())
             return True
         except Exception as e:
             self.element_label.setText(f"Load failed: {e}")
@@ -211,6 +219,7 @@ class RecorderWidget(QMainWindow):
         self._tracker.update(detections, change2, frame_width=w, frame_height=h)
         self._ui_map = self._tracker.current_map
         self._detections = detections
+        self._last_frame = frame
 
     def _resolve_element(self, x: float, y: float) -> dict:
         """Find which element the cursor is on, return semantic info."""
@@ -239,6 +248,79 @@ class RecorderWidget(QMainWindow):
             "text": text,
             "confidence": round(el.confidence, 3),
         }
+
+    def _auto_label_element(self, el_info: dict, x: float, y: float) -> str:
+        """If element has no text (icon), ask VLM to label it. Returns label."""
+        text = el_info.get("text", "")
+        if text:
+            return text  # OCR already got it
+
+        el_class = el_info.get("element_class", "")
+        if not el_class or self._last_frame is None:
+            return ""
+
+        # Check if already labeled by bbox position
+
+        el_id = el_info.get("element_id", "")
+        if el_id in self._icon_labels:
+            return self._icon_labels[el_id].get("label", "")
+
+        # Crop icon + context from last frame
+        import base64
+
+        import cv2
+
+        frame = self._last_frame
+        if self._ui_map is None:
+            return ""
+        from gazefy.utils.geometry import Point
+
+        el = self._ui_map.element_at(Point(x, y))
+        if el is None:
+            return ""
+
+        b = el.bbox
+        x1, y1 = max(0, int(b.x1)), max(0, int(b.y1))
+        x2, y2 = min(frame.shape[1], int(b.x2)), min(frame.shape[0], int(b.y2))
+        if x2 - x1 < 5 or y2 - y1 < 5:
+            return ""
+
+        crop = frame[y1:y2, x1:x2]
+        if crop.shape[2] == 4:
+            crop = cv2.cvtColor(crop, cv2.COLOR_BGRA2BGR)
+        _, buf = cv2.imencode(".png", crop)
+        icon_b64 = base64.standard_b64encode(buf).decode()
+
+        # Context crop
+        pad = 80
+        cy1, cx1 = max(0, y1 - pad), max(0, x1 - pad)
+        cy2 = min(frame.shape[0], y2 + pad)
+        cx2 = min(frame.shape[1], x2 + pad)
+        ctx = frame[cy1:cy2, cx1:cx2]
+        if ctx.shape[2] == 4:
+            ctx = cv2.cvtColor(ctx, cv2.COLOR_BGRA2BGR)
+        _, buf2 = cv2.imencode(".png", ctx)
+        ctx_b64 = base64.standard_b64encode(buf2).decode()
+
+        # Ask VLM
+        try:
+            from gazefy.core.learner import _ask_vlm
+
+            label = _ask_vlm(icon_b64, ctx_b64, el_class)
+        except Exception as e:
+            label = f"(VLM error: {e})"
+            return label
+
+        # Save to icon_labels
+        self._icon_labels[el_id] = {
+            "label": label,
+            "class": el_class,
+            "bbox": [x1, y1, x2, y2],
+        }
+        pack_dir = Path(f"packs/{self._pack_name}")
+        if pack_dir.exists():
+            (pack_dir / "icon_labels.json").write_text(json.dumps(self._icon_labels, indent=2))
+        return label
 
     # --- Actions ---
 
@@ -460,7 +542,7 @@ class RecorderWidget(QMainWindow):
             except Exception as e:
                 self._frame_update.emit(0, f"Detection error: {e}")
 
-        # Click listener
+        # Click listener — records click + auto-labels icons via VLM
         def on_click(x, y, button, pressed):
             if not self._recording:
                 return False
@@ -473,9 +555,14 @@ class RecorderWidget(QMainWindow):
                     "y": int(y),
                     "click": btn,
                 }
-                # Resolve element at click position
+                # Resolve element + auto-label if icon
                 if has_model:
                     el = self._resolve_element(float(x), float(y))
+                    if el and not el.get("text"):
+                        # No OCR text — auto-label via VLM
+                        label = self._auto_label_element(el, float(x), float(y))
+                        if label:
+                            el["text"] = label
                     frame.update(el)
                 self._frames.append(frame)
                 el_desc = frame.get("element_class", "")
