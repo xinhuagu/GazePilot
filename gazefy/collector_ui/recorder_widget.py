@@ -418,16 +418,24 @@ class RecorderWidget(QMainWindow):
             self._start_semantic_mode()
 
     def _start_video_mode(self) -> None:
-        """Start recording: screen video + click events only (no YOLO)."""
-        import datetime
-
+        """Start recording: screen video + click events into pack directory."""
         from gazefy.core.video_recorder import VideoRecorder
 
         pack_name = self.pack_combo.currentText()
-        pack_tag = pack_name if pack_name != "(no model)" else "untagged"
-        rec_dir = Path("recordings")
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        session_dir = rec_dir / f"{pack_tag}_{ts}"
+        if pack_name != "(no model)":
+            from gazefy.core.application_pack import ApplicationPack
+
+            pack = ApplicationPack.load(f"packs/{pack_name}")
+            pack.ensure_dirs()
+            session_dir = pack.new_recording_dir()
+        else:
+            import datetime
+
+            rec_dir = Path("recordings")
+            rec_dir.mkdir(exist_ok=True)
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            session_dir = rec_dir / f"untagged_{ts}"
+            session_dir.mkdir(parents=True, exist_ok=True)
 
         self._video_recorder = VideoRecorder(fps=10)
         self._recording = True
@@ -453,17 +461,26 @@ class RecorderWidget(QMainWindow):
         self._elapsed_timer.start(200)
 
     def _start_semantic_mode(self) -> None:
-        """Start recording: semantic JSONL mode (existing behaviour)."""
+        """Start recording: semantic JSONL into pack directory."""
+        import datetime
+
         has_model = self._load_pipeline()
         self._recording = True
         self._frames = []
         self._record_start = time.monotonic()
-        rec_dir = Path("recordings")
-        rec_dir.mkdir(exist_ok=True)
-        import datetime
 
+        pack_name = self.pack_combo.currentText()
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self._record_path = rec_dir / f"session_{ts}.jsonl"
+        if pack_name != "(no model)":
+            from gazefy.core.application_pack import ApplicationPack
+
+            pack = ApplicationPack.load(f"packs/{pack_name}")
+            pack.ensure_dirs()
+            rec_dir = pack.recordings_dir
+        else:
+            rec_dir = Path("recordings")
+            rec_dir.mkdir(exist_ok=True)
+        self._record_path = rec_dir / f"semantic_{ts}.jsonl"
 
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -595,7 +612,9 @@ class RecorderWidget(QMainWindow):
         t.start()
 
     def _on_train(self) -> None:
-        """Train YOLO on all accumulated training data in the pack."""
+        """Train YOLO on all accumulated data. Save timestamped model + log."""
+        import datetime
+
         pack_name = self.pack_combo.currentText()
         if pack_name == "(no model)":
             self.element_label.setText("Select a pack first")
@@ -614,6 +633,12 @@ class RecorderWidget(QMainWindow):
         self.start_btn.setEnabled(False)
         self.status_label.setText("Training...")
         self.status_label.setStyleSheet("font-weight: bold; color: #FF8C00;")
+
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        models_dir = pack_dir / "models"
+        logs_dir = pack_dir / "logs"
+        models_dir.mkdir(exist_ok=True)
+        logs_dir.mkdir(exist_ok=True)
 
         def run() -> None:
             try:
@@ -637,29 +662,47 @@ class RecorderWidget(QMainWindow):
                 trainer = PackTrainer(config)
                 result = trainer.train()
 
-                # Package: update model in pack
+                # Find trained model
+                import glob
                 import shutil
 
                 model_src = Path(result.best_model_path)
                 if not model_src.exists():
-                    # Ultralytics may put it elsewhere
-                    import glob
-
                     candidates = glob.glob("**/best.pt", recursive=True)
                     if candidates:
                         model_src = Path(sorted(candidates)[-1])
 
                 if model_src.exists():
+                    # Save timestamped copy to models/
+                    ts_model = models_dir / f"model_{ts}.pt"
+                    shutil.copy2(model_src, ts_model)
+                    # Update current model.pt
                     shutil.copy2(model_src, pack_dir / "model.pt")
 
+                # Write training log
                 map50 = result.metrics.get("metrics/mAP50(B)", "?")
+                log_path = logs_dir / f"train_{ts}.log"
+                import json as json_mod
+
+                log_data = {
+                    "timestamp": ts,
+                    "dataset": str(dataset_yaml),
+                    "epochs": config.epochs,
+                    "imgsz": config.imgsz,
+                    "metrics": {
+                        k: (float(v) if hasattr(v, "__float__") else v)
+                        for k, v in result.metrics.items()
+                    },
+                    "model_file": f"models/model_{ts}.pt",
+                }
+                log_path.write_text(json_mod.dumps(log_data, indent=2))
+
                 self._frame_update.emit(
-                    1, f"Training done! mAP@0.5={map50} Model saved to {pack_dir}/model.pt"
+                    1,
+                    f"Training done! mAP@0.5={map50} → models/model_{ts}.pt",
                 )
             except Exception as e:
                 self._frame_update.emit(0, f"Training error: {e}")
-            finally:
-                pass
 
         t = threading.Thread(target=run, daemon=True)
         t.start()

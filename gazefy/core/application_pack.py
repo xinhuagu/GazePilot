@@ -1,14 +1,27 @@
-"""ApplicationPack: hot-swappable per-application model + config artifact.
+"""ApplicationPack: self-contained per-application workspace.
 
-An ApplicationPack is a directory containing everything needed to detect and
-operate one specific application:
+Each pack is a complete, portable directory:
 
     packs/my_app/
-    ├── pack.yaml          # PackMetadata (name, version, labels, thresholds)
-    ├── model.pt           # Trained YOLO weights
-    ├── labels.yaml        # Class name list
-    ├── workflows/         # Optional workflow definitions
-    └── verifier_rules/    # Optional pre/post-action verification rules
+    ├── pack.yaml              # Config: labels, window_match, thresholds
+    ├── model.pt               # Current best model (copy of latest in models/)
+    ├── icon_labels.json       # Accumulated icon semantic dictionary
+    ├── recordings/            # All video recordings for this app
+    │   ├── 20260404_103000/
+    │   │   ├── video.mp4
+    │   │   ├── events.jsonl
+    │   │   └── annotations.jsonl
+    │   └── 20260404_110500/
+    ├── training_data/         # Accumulated YOLO training data
+    │   ├── images/
+    │   ├── labels/
+    │   └── dataset.yaml
+    ├── models/                # All trained models with timestamps
+    │   ├── model_20260404_120000.pt
+    │   └── model_20260404_150000.pt
+    └── logs/                  # Training + operation logs
+        ├── train_20260404_120000.log
+        └── train_20260404_150000.log
 """
 
 from __future__ import annotations
@@ -64,8 +77,43 @@ class ApplicationPack:
         return {i: name for i, name in enumerate(self.metadata.labels)}
 
     @property
-    def workflows_dir(self) -> Path:
-        return self.pack_dir / "workflows"
+    def recordings_dir(self) -> Path:
+        return self.pack_dir / "recordings"
+
+    @property
+    def training_data_dir(self) -> Path:
+        return self.pack_dir / "training_data"
+
+    @property
+    def models_dir(self) -> Path:
+        return self.pack_dir / "models"
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.pack_dir / "logs"
+
+    @property
+    def icon_labels_path(self) -> Path:
+        return self.pack_dir / "icon_labels.json"
+
+    def ensure_dirs(self) -> None:
+        """Create all pack subdirectories if they don't exist."""
+        for d in [
+            self.recordings_dir,
+            self.training_data_dir,
+            self.models_dir,
+            self.logs_dir,
+        ]:
+            d.mkdir(parents=True, exist_ok=True)
+
+    def new_recording_dir(self) -> Path:
+        """Create and return a new timestamped recording directory."""
+        import datetime
+
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        d = self.recordings_dir / ts
+        d.mkdir(parents=True, exist_ok=True)
+        return d
 
     @classmethod
     def load(cls, pack_dir: str | Path) -> ApplicationPack:
