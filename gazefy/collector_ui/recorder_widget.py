@@ -64,6 +64,9 @@ class RecorderWidget(QMainWindow):
         # Video mode
         self._video_recorder = None
         self._video_session_dir: Path | None = None
+        # Monitor mode
+        self._monitoring = False
+        self._monitor_thread: threading.Thread | None = None
 
         self._init_ui()
         self._frame_update.connect(self._on_frame_update)
@@ -83,19 +86,20 @@ class RecorderWidget(QMainWindow):
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(4)
 
-        # Pack selector row + video mode toggle
+        # Pack selector row + mode toggles
         pack_row = QHBoxLayout()
         pack_row.addWidget(QLabel("Pack:"))
         self.pack_combo = QComboBox()
         self.pack_combo.setMinimumWidth(120)
         pack_row.addWidget(self.pack_combo, 1)
-        self.video_check = QCheckBox("Video mode")
-        self.video_check.setToolTip(
-            "Record screen as MP4 + mouse events.\n"
-            "No YOLO model needed at record time.\n"
-            "Annotate semantics afterwards with the Annotate button."
+        self.video_check = QCheckBox("Video")
+        self.video_check.setToolTip("Record screen as MP4 + mouse events")
+        self.monitor_check = QCheckBox("Monitor")
+        self.monitor_check.setToolTip(
+            "Live cursor-to-element tracking.\nShows which UI element the mouse is hovering over."
         )
         pack_row.addWidget(self.video_check)
+        pack_row.addWidget(self.monitor_check)
         layout.addLayout(pack_row)
 
         # Annotator mode row (visible only in video mode)
@@ -173,6 +177,7 @@ class RecorderWidget(QMainWindow):
         self.annotate_btn.clicked.connect(self._on_annotate)
         self.train_btn.clicked.connect(self._on_train)
         self.video_check.toggled.connect(self._on_video_mode_toggled)
+        self.monitor_check.toggled.connect(self._on_monitor_toggled)
 
     def _scan_packs(self) -> None:
         packs_dir = Path("packs")
@@ -338,6 +343,58 @@ class RecorderWidget(QMainWindow):
 
     def _on_video_mode_toggled(self, checked: bool) -> None:
         self._ann_row_widget.setVisible(checked)
+
+    def _on_monitor_toggled(self, checked: bool) -> None:
+        if checked:
+            if not self._load_pipeline():
+                self.monitor_check.setChecked(False)
+                self.element_label.setText("Select a pack with a model first")
+                return
+            self._monitoring = True
+            self.status_label.setText("Monitoring...")
+            self.status_label.setStyleSheet("font-weight: bold; color: #2196F3;")
+            self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+            self._monitor_thread.start()
+        else:
+            self._monitoring = False
+            self.status_label.setText("Ready")
+            self.status_label.setStyleSheet("font-weight: bold;")
+
+    def _monitor_loop(self) -> None:
+        """Continuously detect + resolve cursor to element."""
+        try:
+            import mss
+            import numpy as np
+            import pyautogui
+
+            pyautogui.FAILSAFE = False
+        except ImportError:
+            return
+
+        last_element_id = ""
+        with mss.mss() as sct:
+            monitor = sct.monitors[1]
+            # Initial detection
+            img = np.array(sct.grab(monitor))
+            self._detect_and_ocr(img)
+
+            while self._monitoring:
+                x, y = pyautogui.position()
+                el_info = self._resolve_element(float(x), float(y))
+                el_class = el_info.get("element_class", "")
+                el_text = el_info.get("text", "")
+                el_id = el_info.get("element_id", "")
+
+                if el_class:
+                    desc = f'[{el_class}] "{el_text}" ({el_id})'
+                else:
+                    desc = f"({x}, {y}) no element"
+
+                if el_id != last_element_id:
+                    last_element_id = el_id
+                    self._frame_update.emit(0, f"→ {desc}")
+
+                time.sleep(0.05)
 
     def _on_start(self) -> None:
         if self._recording:
