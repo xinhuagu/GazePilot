@@ -82,7 +82,7 @@ class RecorderWidget(QMainWindow):
     """Compact floating window for semantic recording + auto icon labeling."""
 
     _frame_update = Signal(int, str)
-    _overlay_update = Signal(list, str)  # (elements_list, cursor_element_id)
+    # overlay removed — element info shown in status bar only
 
     def __init__(self):
         super().__init__()
@@ -108,11 +108,11 @@ class RecorderWidget(QMainWindow):
         # Monitor mode
         self._monitoring = False
         self._monitor_thread: threading.Thread | None = None
-        self._overlay = None
+        # overlay removed — status bar shows element info
 
         self._init_ui()
         self._frame_update.connect(self._on_frame_update)
-        self._overlay_update.connect(self._on_overlay_update)
+        # overlay removed
         self._elapsed_timer = QTimer()
         self._elapsed_timer.timeout.connect(self._update_elapsed)
         self._scan_windows()
@@ -509,28 +509,12 @@ class RecorderWidget(QMainWindow):
             # video always on
             self.window_combo.setEnabled(False)
 
-            # Create overlay covering the full screen
-            from PySide6.QtWidgets import QApplication
-
-            from gazefy.collector_ui.overlay import OverlayWidget
-
-            self._overlay = OverlayWidget()
-            screen = QApplication.primaryScreen()
-            if screen:
-                g = screen.geometry()
-                self._overlay.setGeometry(g.x(), g.y(), g.width(), g.height())
-            self._overlay.show()
-            self._overlay.raise_()
-
             self.status_label.setText("Monitoring...")
             self.status_label.setStyleSheet("font-weight: bold; color: #2196F3;")
             self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
             self._monitor_thread.start()
         else:
             self._monitoring = False
-            if self._overlay:
-                self._overlay.close()
-                self._overlay = None
             self.start_btn.setEnabled(True)
             self.open_btn.setEnabled(True)
             # video always on
@@ -619,8 +603,6 @@ class RecorderWidget(QMainWindow):
 
                     n = self._ui_map.element_count if self._ui_map else 0
                     self._frame_update.emit(0, f"Detected {n} elements")
-                    # Push overlay with window offset
-                    self._push_overlay_elements_with_region(region)
 
                 # 4. Resolve cursor (screen coords → window-relative pixel coords)
                 x, y = pyautogui.position()
@@ -642,59 +624,7 @@ class RecorderWidget(QMainWindow):
                     last_element_id = el_id
                     self._frame_update.emit(0, f"→ {desc}")
 
-                self._overlay_update.emit([], el_id)
                 time.sleep(0.05)
-
-    def _push_overlay_elements_with_region(self, region) -> None:
-        """Convert UIMap elements to overlay, positioned on the window."""
-        if self._ui_map is None:
-            return
-        # Detect actual retina scale from last captured frame
-        retina = 1.0
-        if self._last_frame is not None:
-            import numpy as np
-
-            if isinstance(self._last_frame, np.ndarray):
-                retina = self._last_frame.shape[1] / max(region.width, 1)
-        elements = []
-        for el in self._ui_map.elements.values():
-            text = el.text
-            if not text and hasattr(self, "_texts") and hasattr(self, "_detections"):
-                for idx, dt in self._texts.items():
-                    if idx < len(self._detections):
-                        det = self._detections[idx]
-                        if (
-                            abs(det.bbox.x1 - el.bbox.x1) < 10
-                            and abs(det.bbox.y1 - el.bbox.y1) < 10
-                        ):
-                            text = dt
-                            break
-            # bbox is in pixel coords relative to captured window
-            # Convert to screen coords for overlay
-            elements.append(
-                {
-                    "id": el.id,
-                    "x1": el.bbox.x1 / retina + region.left,
-                    "y1": el.bbox.y1 / retina + region.top,
-                    "x2": el.bbox.x2 / retina + region.left,
-                    "y2": el.bbox.y2 / retina + region.top,
-                    "class": el.class_name,
-                    "text": text,
-                    "conf": el.confidence,
-                }
-            )
-
-        # Emit with region info for overlay positioning
-        self._overlay_update.emit(elements, "")
-
-    def _on_overlay_update(self, elements: list, cursor_id: str) -> None:
-        """Handle overlay update signal (must run on main thread)."""
-        if self._overlay is None:
-            return
-        if elements:
-            self._overlay.set_elements(elements, cursor_id, retina_scale=1.0)
-        else:
-            self._overlay._update_cursor(cursor_id)
 
     def _on_start(self) -> None:
         if self._recording:
