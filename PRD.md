@@ -93,8 +93,9 @@ V1 is optimized first for **VDI-hosted professional Windows applications**, beca
 ### FR2: Application Routing and Pack Loading
 - Identify the active application/session from window metadata, configured region, or lightweight routing heuristics
 - Load the matching `ApplicationPack` at runtime without modifying shared orchestration code
-- Support pack-local assets: detector, classifier/verifier rules, labels, workflows, semantics, thresholds, targeting rules
+- Support pack-local assets: detector, ontology, policies, prompts, workflows, evals, thresholds
 - Fail closed if no safe pack match is available
+- Validate ontology schema version matches the loaded model's label taxonomy on pack load
 
 ### FR3: Change Detection
 - Detect whether the screen content has changed between frames
@@ -133,8 +134,12 @@ V1 is optimized first for **VDI-hosted professional Windows applications**, beca
 - Support composite actions: select_menu_item, fill_field
 - Resolve action-specific hotspots instead of always clicking raw bbox center
 - Run through an explicit state machine: `PLAN_ACTION -> PRECHECK_TARGET -> EXECUTE_ACTION -> WAIT_FOR_EFFECT -> VERIFY_RESULT -> RECOVER_TARGET/ABORT`
-- Verify action effect via change detection, OCR/classifier signals, and expected state transitions
-- Retry only safe actions under explicit policy; never blind-retry destructive actions
+- Enforce pack policies before execution: forbidden zones, confirmation requirements, retry limits
+- Validate input text against ontology `validation_regex` before type_text actions
+- Verify action effect semantically: check `expected_outcome` from ontology (element disappears,
+  text appears, UIMap state matches expectation) in addition to raw change detection
+- Retry only safe actions under explicit policy from `policies/`; never blind-retry actions
+  marked `never_retry` in the pack
 - dry_run mode: log intended actions without executing
 
 ### FR9: LLM Integration

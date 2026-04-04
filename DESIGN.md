@@ -92,63 +92,212 @@ Without a manual, the system operates normally using only the detection model + 
 
 ## Multi-Application Strategy: Hot-Swappable Application Packs
 
-Gazefy should not assume one global detector for all software. Each target application should ship as an independent runtime pack that can be loaded, unloaded, and upgraded without affecting other applications.
+Gazefy should not assume one global detector for all software. Each target application should ship
+as an independent runtime pack that can be loaded, unloaded, and upgraded without affecting other
+applications.
+
+A pack is not just a model file. It is the complete **perception + operation + safety + evaluation**
+artifact for one target application.
+
+### Pack Contract
 
 An **ApplicationPack** contains:
-- detector model
-- screen classifier
-- element verifier rules
-- label taxonomy
-- semantic dictionary
-- workflow definitions
-- targeting rules
-- app-specific config (window matching, thresholds, timeouts, OCR hints)
 
-Recommended runtime flow:
+| File / Directory | Purpose |
+|---|---|
+| `pack.yaml` | Pack metadata, version, window matching rules, thresholds |
+| `model.pt` / `model.mlpackage` | Trained YOLO detector |
+| `ontology.yaml` | **Business-semantic UI element taxonomy** (see below) |
+| `policies/` | **Safety rules**: forbidden zones, confirmation requirements, retry limits |
+| `prompts/` | App-specific LLM system prompt and few-shot examples |
+| `workflows/` | Named task definitions (step sequences, expected outcomes) |
+| `evals/` | Regression tasks, golden screenshots, expected action sequences |
+
+### Ontology: Business-Semantic UI Taxonomy
+
+Generic class names (`button`, `input`) are insufficient for reliable agent operation. A production
+pack must define **business-semantic classes** that map directly to the application's domain.
+
+**Generic (insufficient):**
+```yaml
+# labels.yaml — what YOLO detects
+names:
+  0: button
+  1: input_field
+  2: menu
+```
+
+**Business-semantic (production-grade):**
+```yaml
+# ontology.yaml — what the agent reasons about
+version: 1
+app: sap_export
+
+classes:
+  # Detection class → semantic ID → description + interaction hints
+  save_button:
+    detection_class: button
+    description: "Saves the current record to the database"
+    interaction: click
+    confirmation_required: false
+    critical: false
+
+  submit_export_button:
+    detection_class: button
+    description: "Submits the export job — triggers server-side processing"
+    interaction: click
+    confirmation_required: true         # policy: always confirm before clicking
+    critical: true
+    expected_outcome:
+      text_appears: "Export submitted"
+      element_disappears: self
+
+  customer_id_field:
+    detection_class: input_field
+    description: "Customer ID — must be a 6-digit numeric code"
+    interaction: type_text
+    validation_regex: "^[0-9]{6}$"
+
+  invoice_table:
+    detection_class: table
+    description: "Grid showing invoice rows; click a row to select it"
+    interaction: click_row
+
+  report_type_dropdown:
+    detection_class: dropdown
+    description: "Selects the output report format (PDF, CSV, XLSX)"
+    interaction: select_option
+
+  date_range_from:
+    detection_class: input_field
+    description: "Start date for the report period (DD.MM.YYYY)"
+    interaction: type_text
+    validation_regex: "^[0-9]{2}\\.[0-9]{2}\\.[0-9]{4}$"
+```
+
+The ontology serves three purposes:
+1. **LLM context**: the agent knows *what each element does*, not just its visual class
+2. **Action validation**: `type_text` into `customer_id_field` is validated against `validation_regex`
+   before the action is sent to pyautogui
+3. **Expected outcome**: verifier knows what "success" looks like for each element type
+
+### Policies: Safety Rules
+
+A `policies/` directory contains YAML files that constrain what the executor may do. This is the
+safety boundary between the model and the application.
+
+```yaml
+# policies/safety.yaml
+
+forbidden_zones:
+  # Bounding boxes (normalized 0-1) the executor must never click
+  - label: "navigation_bar_top"
+    bbox: [0.0, 0.0, 1.0, 0.05]
+    reason: "Avoid accidental window close / minimize"
+
+  - label: "delete_record_button"
+    bbox: [0.85, 0.90, 1.0, 1.0]
+    reason: "Destructive action — blocked unless explicitly unlocked"
+
+confirmation_required:
+  # Any action targeting these semantic IDs requires explicit user confirmation
+  - submit_export_button
+  - delete_all_records
+  - close_without_saving
+
+retry_policy:
+  max_retries: 2
+  safe_to_retry:         # Only these action types may be retried automatically
+    - click
+    - type_text
+  never_retry:           # These are never retried — abort instead
+    - submit_export_button
+    - confirm_dialog_ok
+
+timeouts:
+  focus_click_ms: 500
+  menu_open_ms: 1200
+  page_transition_ms: 5000
+  vdi_round_trip_ms: 8000
+```
+
+**Policy enforcement** happens in `ActionExecutor` before execution:
+- Check target semantic ID against `forbidden_zones` and `confirmation_required`
+- Apply retry limits from `retry_policy`
+- Use timeouts from this file instead of hardcoded values
+
+### Pack Directory Layout
+
+```text
+packs/
+  sap_export/
+    pack.yaml                 # Metadata, window matching, version
+    model.pt                  # Trained YOLO weights
+    model.mlpackage           # CoreML export for Apple Silicon
+    ontology.yaml             # Business-semantic class definitions
+    policies/
+      safety.yaml             # Forbidden zones, confirmation rules, retry policy
+    prompts/
+      system.txt              # App-specific LLM system prompt
+      few_shots.yaml          # Input→output examples for this app
+    workflows/
+      export_report.yaml      # Step-by-step: open menu → fill form → submit
+      create_invoice.yaml
+    evals/
+      smoke_test.yaml         # Fast sanity: 3 tasks, expected outcomes
+      regression.yaml         # Full suite: 20 tasks, golden screenshots
+```
+
+### How Ontology Feeds Into the Agent Loop
+
+```
+UIMap (YOLO detections)
+    ↓
+OntologyResolver: map detection_class → semantic_id using bounding box + OCR text
+    ↓
+EnrichedUIMap: each element has semantic_id + description + expected_outcome
+    ↓
+LLM sees: "save_button: Saves the current record [click, no confirmation needed]"
+          "submit_export_button: Submits export job [click, CONFIRMATION REQUIRED]"
+    ↓
+LLM plans action: {type: click, target: save_button}
+    ↓
+PolicyChecker: is save_button in forbidden_zones? requires confirmation? → No → proceed
+    ↓
+ActionExecutor: click → verify → check expected_outcome from ontology
+```
+
+This is the difference between:
+- **Now**: "There is a button at (120, 80). Click it?"
+- **With ontology**: "This is the Save button. It saves the record. No confirmation needed.
+  Expected: the form closes or a success toast appears."
+
+### Recommended Runtime Flow
 
 ```
 Capture frame
   ↓
-AppRouter identifies current application
+AppRouter identifies current application → loads matching ApplicationPack
   ↓
-ModelRegistry loads matching ApplicationPack
+Pack-specific YOLO detector → raw detections
   ↓
-Pack-specific detector/classifier/verifier run
+OntologyResolver enriches UIMap with semantic IDs + descriptions
   ↓
-UIMap + action planning + execution use that pack's rules
+PolicyChecker loaded from policies/
+  ↓
+LLM receives EnrichedUIMap + app-specific system prompt from prompts/
+  ↓
+LLM returns actions → PolicyChecker validates → ActionExecutor runs
+  ↓
+Verifier checks expected_outcome from ontology → SUCCESS or replan
 ```
 
 This keeps the system modular:
-- one app can be retrained without touching others
-- each app can use its own taxonomy and verification logic
-- memory usage stays controlled because packs are loaded on demand
-- deployment becomes safer because a bad model update is isolated to one app
+- one app can be retrained or re-ontologied without touching others
+- safety rules are pack-local and version-controlled alongside the model
+- the LLM always has domain-accurate context, not just visual labels
+- deployment is safer because a bad policy update is isolated to one pack
 
-Recommended pack directory layout:
-
-```text
-app_packs/
-  sap_gui/
-    detector.mlpackage
-    screen_classifier.mlpackage
-    labels.yaml
-    semantics.yaml
-    workflows.yaml
-    targeting.yaml
-    verifier.yaml
-    app_config.yaml
-  virtel_terminal/
-    detector.mlpackage
-    screen_classifier.mlpackage
-    labels.yaml
-    semantics.yaml
-    workflows.yaml
-    targeting.yaml
-    verifier.yaml
-    app_config.yaml
-```
-
-The hot-swappable boundary is the full application capability pack, not just the detection model.
 
 ### Enhanced UIElement Data Structure
 
