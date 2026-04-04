@@ -828,7 +828,7 @@ class RecorderWidget(QMainWindow):
                 )
                 from PIL import Image
 
-                from scripts.auto_label import (
+                from gazefy.detection.grounding_label import (
                     CLASSES,
                     detections_to_yolo,
                     load_model,
