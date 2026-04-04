@@ -419,13 +419,15 @@ class RecorderWidget(QMainWindow):
 
     def _start_video_mode(self) -> None:
         """Start recording: screen video + click events only (no YOLO)."""
-        from gazefy.core.video_recorder import VideoRecorder
-
-        rec_dir = Path("recordings")
         import datetime
 
+        from gazefy.core.video_recorder import VideoRecorder
+
+        pack_name = self.pack_combo.currentText()
+        pack_tag = pack_name if pack_name != "(no model)" else "untagged"
+        rec_dir = Path("recordings")
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        session_dir = rec_dir / f"session_{ts}"
+        session_dir = rec_dir / f"{pack_tag}_{ts}"
 
         self._video_recorder = VideoRecorder(fps=10)
         self._recording = True
@@ -458,7 +460,10 @@ class RecorderWidget(QMainWindow):
         self._record_start = time.monotonic()
         rec_dir = Path("recordings")
         rec_dir.mkdir(exist_ok=True)
-        self._record_path = rec_dir / f"session_{int(time.time())}.jsonl"
+        import datetime
+
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._record_path = rec_dir / f"session_{ts}.jsonl"
 
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
