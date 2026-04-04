@@ -42,6 +42,7 @@ class RecorderWidget(QMainWindow):
     """Compact floating window for semantic recording + auto icon labeling."""
 
     _frame_update = Signal(int, str)
+    _overlay_update = Signal(list, str)  # (elements_list, cursor_element_id)
 
     def __init__(self):
         super().__init__()
@@ -67,9 +68,11 @@ class RecorderWidget(QMainWindow):
         # Monitor mode
         self._monitoring = False
         self._monitor_thread: threading.Thread | None = None
+        self._overlay = None
 
         self._init_ui()
         self._frame_update.connect(self._on_frame_update)
+        self._overlay_update.connect(self._on_overlay_update)
         self._elapsed_timer = QTimer()
         self._elapsed_timer.timeout.connect(self._update_elapsed)
         self._scan_packs()
@@ -359,12 +362,22 @@ class RecorderWidget(QMainWindow):
             self.train_btn.setEnabled(False)
             self.video_check.setEnabled(False)
             self.pack_combo.setEnabled(False)
+
+            # Create overlay
+            from gazefy.collector_ui.overlay import OverlayWidget
+
+            self._overlay = OverlayWidget()
+            self._overlay.show()
+
             self.status_label.setText("Monitoring...")
             self.status_label.setStyleSheet("font-weight: bold; color: #2196F3;")
             self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
             self._monitor_thread.start()
         else:
             self._monitoring = False
+            if self._overlay:
+                self._overlay.close()
+                self._overlay = None
             self.start_btn.setEnabled(True)
             self.open_btn.setEnabled(True)
             self.video_check.setEnabled(True)
@@ -373,7 +386,7 @@ class RecorderWidget(QMainWindow):
             self.status_label.setStyleSheet("font-weight: bold;")
 
     def _monitor_loop(self) -> None:
-        """Continuously detect + resolve cursor to element."""
+        """Continuously detect + resolve cursor, update overlay."""
         try:
             import mss
             import numpy as np
@@ -389,6 +402,9 @@ class RecorderWidget(QMainWindow):
             # Initial detection
             img = np.array(sct.grab(monitor))
             self._detect_and_ocr(img)
+
+            # Build overlay elements from UIMap
+            self._push_overlay_elements()
 
             while self._monitoring:
                 x, y = pyautogui.position()
@@ -406,7 +422,61 @@ class RecorderWidget(QMainWindow):
                     last_element_id = el_id
                     self._frame_update.emit(0, f"→ {desc}")
 
+                # Update overlay cursor highlight
+                self._overlay_update.emit([], el_id)
+
                 time.sleep(0.05)
+
+    def _push_overlay_elements(self) -> None:
+        """Convert UIMap elements to overlay draw list."""
+        if self._ui_map is None:
+            return
+        elements = []
+        for el in self._ui_map.elements.values():
+            text = el.text
+            # Check OCR texts
+            if not text and hasattr(self, "_texts") and hasattr(self, "_detections"):
+                for idx, dt in self._texts.items():
+                    if idx < len(self._detections):
+                        det = self._detections[idx]
+                        if (
+                            abs(det.bbox.x1 - el.bbox.x1) < 10
+                            and abs(det.bbox.y1 - el.bbox.y1) < 10
+                        ):
+                            text = dt
+                            break
+            elements.append(
+                {
+                    "id": el.id,
+                    "x1": el.bbox.x1,
+                    "y1": el.bbox.y1,
+                    "x2": el.bbox.x2,
+                    "y2": el.bbox.y2,
+                    "class": el.class_name,
+                    "text": text,
+                    "conf": el.confidence,
+                }
+            )
+        self._overlay_update.emit(elements, "")
+
+    def _on_overlay_update(self, elements: list, cursor_id: str) -> None:
+        """Handle overlay update signal (must run on main thread)."""
+        if self._overlay is None:
+            return
+        if elements:
+            # Full element update
+            self._overlay.set_elements(elements, cursor_id)
+            # Position overlay to cover screen
+            from PySide6.QtWidgets import QApplication
+
+            screen = QApplication.primaryScreen()
+            if screen:
+                g = screen.geometry()
+                self._overlay.set_region(g.x(), g.y(), g.width(), g.height())
+        else:
+            # Just cursor update
+            self._overlay._cursor_element_id = cursor_id
+            self._overlay.update()
 
     def _on_start(self) -> None:
         if self._recording:
