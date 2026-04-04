@@ -189,23 +189,23 @@ class VideoRecorder:
                 self._on_click(ev)
 
         def on_scroll(x: float, y: float, dx: int, dy: int) -> None:
-            if not self._recording:
-                return
-            if dy == 0:
-                return
-            t = round(time.monotonic() - self._start_time, 3)
-            direction = "up" if dy > 0 else "down"
-            # Store raw dy (may be fractional on trackpad)
-            ev = {
-                "t": t,
-                "x": int(x),
-                "y": int(y),
-                "scroll": direction,
-                "dy": round(float(dy), 2),
-            }
-            self._events.append(ev)
-            if self._on_click:
-                self._on_click(ev)
+            try:
+                if not self._recording or dy == 0:
+                    return
+                t = round(time.monotonic() - self._start_time, 3)
+                direction = "up" if dy > 0 else "down"
+                ev = {
+                    "t": t,
+                    "x": int(x),
+                    "y": int(y),
+                    "scroll": direction,
+                    "dy": round(float(dy), 2),
+                }
+                self._events.append(ev)
+                if self._on_click:
+                    self._on_click(ev)
+            except Exception:
+                pass  # Never crash the pynput listener
 
         self._mouse_listener = mouse.Listener(
             on_move=on_move, on_click=on_click, on_scroll=on_scroll

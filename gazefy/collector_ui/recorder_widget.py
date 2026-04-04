@@ -642,10 +642,17 @@ class RecorderWidget(QMainWindow):
         self._video_session_dir = session_dir
 
         def on_click(ev: dict) -> None:
-            self._frame_update.emit(
-                self._video_recorder.click_count if self._video_recorder else 0,
-                f"CLICK {ev['click']} at ({ev['x']}, {ev['y']})",
-            )
+            try:
+                if ev.get("click"):
+                    desc = f"CLICK {ev['click']} ({ev['x']},{ev['y']})"
+                elif ev.get("scroll"):
+                    desc = f"SCROLL {ev['scroll']} dy={ev['dy']} ({ev['x']},{ev['y']})"
+                else:
+                    return
+                count = self._video_recorder.click_count if self._video_recorder else 0
+                self._frame_update.emit(count, desc)
+            except Exception:
+                pass  # Never crash the pynput listener
 
         self._video_recorder.start(session_dir, on_click=on_click)
 
