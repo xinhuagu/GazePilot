@@ -113,13 +113,6 @@ def main(argv: list[str] | None = None) -> None:
         help="Keep elements labelled 'unknown' / 'unknown icon' (excluded by default)",
     )
 
-    # --- learn ---
-    learn_p = sub.add_parser("learn", help="Click UI elements, VLM identifies them")
-    learn_p.add_argument("--window", type=str, help="Window name")
-    learn_p.add_argument("--region", type=str, help="Manual region: left,top,width,height")
-    learn_p.add_argument("--pack", type=str, required=True, help="Pack name (must have model)")
-    learn_p.add_argument("--packs-dir", type=str, default="packs")
-
     # --- task ---
     task_p = sub.add_parser(
         "task",
@@ -355,16 +348,6 @@ def main(argv: list[str] | None = None) -> None:
                 sys.exit(0 if result.status == "success" else 1)
         finally:
             orch.shutdown()
-
-    elif args.command == "learn":
-        from gazefy.core.learner import run_learn
-
-        region = _resolve_region(args)
-        run_learn(
-            region=region,
-            pack_name=args.pack,
-            packs_dir=args.packs_dir,
-        )
 
     elif args.command == "replay":
         from gazefy.core.monitor import run_replay
