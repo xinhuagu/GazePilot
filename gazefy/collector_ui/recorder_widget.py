@@ -202,19 +202,46 @@ class RecorderWidget(QMainWindow):
                 self.window_combo.addItem(label, name)
 
     def _on_app_selected(self) -> None:
-        """Bring the selected application to front."""
+        """Bring the selected application to front + check pack state."""
         app_name = self.window_combo.currentData()
-        if app_name:
-            try:
-                import subprocess
+        if not app_name:
+            return
 
-                subprocess.run(
-                    ["osascript", "-e", f'tell application "{app_name}" to activate'],
-                    timeout=3,
-                    capture_output=True,
-                )
-            except Exception:
-                pass
+        # Activate the app
+        try:
+            import subprocess
+
+            subprocess.run(
+                ["osascript", "-e", f'tell application "{app_name}" to activate'],
+                timeout=3,
+                capture_output=True,
+            )
+        except Exception:
+            pass
+
+        # Check if pack has recordings → enable Annotate/Train
+        pack_name = app_name.lower().replace(" ", "_")
+        pack_dir = Path("packs") / pack_name
+        rec_dir = pack_dir / "recordings"
+        has_recordings = False
+        if rec_dir.exists():
+            # Find latest recording with video.mp4
+            for d in sorted(rec_dir.iterdir(), reverse=True):
+                if d.is_dir() and (d / "video.mp4").exists():
+                    self._video_session_dir = d
+                    has_recordings = True
+                    break
+
+        self.annotate_btn.setEnabled(has_recordings)
+        has_training = (pack_dir / "training_data" / "dataset.yaml").exists()
+        self.train_btn.setEnabled(has_training)
+
+        if has_recordings:
+            self.element_label.setText(f"Latest: {self._video_session_dir}")
+        elif pack_dir.exists():
+            self.element_label.setText("Pack exists, no recordings yet")
+        else:
+            self.element_label.setText("New app — Start to record")
 
     def _get_selected_app(self) -> str:
         """Get the selected application name (lowercase, for pack dir)."""
