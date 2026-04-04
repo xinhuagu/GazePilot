@@ -778,7 +778,7 @@ class RecorderWidget(QMainWindow):
         self.status_label.setStyleSheet("font-weight: bold; color: #FF8C00;")
 
         session_dir = self._video_session_dir
-        detector_mode = self.detector_combo.currentData()
+        self.detector_combo.currentData()
         pack_dir = self._ensure_pack(pack_name)
 
         def run() -> None:
@@ -786,38 +786,85 @@ class RecorderWidget(QMainWindow):
                 self._frame_update.emit(current, f"{current}/{total}  {desc}")
 
             try:
-                # Step 1: Annotate
-                self._frame_update.emit(0, "Step 1/2: Annotating...")
-                if detector_mode == "grounding":
-                    from gazefy.core.hybrid_annotator import HybridAnnotator
+                # Step 1: Extract frames from video
+                self._frame_update.emit(0, "Step 1/3: Extracting frames...")
+                import cv2
 
-                    annotator = HybridAnnotator(pack_dir=pack_dir)
-                else:
-                    from gazefy.core.video_annotator import VideoAnnotator
-
-                    annotator = VideoAnnotator()
-
-                annotator.annotate_session(session_dir, on_progress=on_progress)
-
-                # Step 2: Convert to YOLO + append to pack training data
-                self._frame_update.emit(0, "Step 2/2: Converting to YOLO...")
-                from gazefy.training.annotation_converter import (
-                    AnnotationConverter,
-                )
+                video_path = session_dir / "video.mp4"
+                cap = cv2.VideoCapture(str(video_path))
+                fps = cap.get(cv2.CAP_PROP_FPS) or 10
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                extract_interval = max(1, int(fps * 3))  # Every 3 seconds
 
                 training_dir = pack_dir / "training_data"
-                converter = AnnotationConverter()
-                result = converter.convert_session(session_dir, output_dir=training_dir)
-                n_images = result.n_images
-                n_elements = result.n_elements
-
-                # Count total accumulated data
                 img_dir = training_dir / "images"
-                total = len(list(img_dir.glob("*.png"))) if img_dir.exists() else 0
+                img_dir.mkdir(parents=True, exist_ok=True)
 
+                extracted = []
+                frame_idx = 0
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    if frame_idx % extract_interval == 0:
+                        import datetime as dt
+
+                        ts = dt.datetime.now().strftime("%Y%m%d%H%M%S")
+                        name = f"frame_{ts}_{frame_idx:04d}.png"
+                        cv2.imwrite(str(img_dir / name), frame)
+                        extracted.append(name)
+                        on_progress(
+                            len(extracted),
+                            total_frames // extract_interval,
+                            f"Extracted {name}",
+                        )
+                    frame_idx += 1
+                cap.release()
+
+                # Step 2: Auto-label with GroundingDINO (local, no API)
                 self._frame_update.emit(
-                    n_images,
-                    f"Done: +{n_images} images, +{n_elements} elements "
+                    0,
+                    f"Step 2/3: Labeling {len(extracted)} frames (GroundingDINO)...",
+                )
+                from PIL import Image
+
+                from scripts.auto_label import (
+                    CLASSES,
+                    detections_to_yolo,
+                    load_model,
+                    predict_image,
+                )
+
+                lbl_dir = training_dir / "labels"
+                lbl_dir.mkdir(parents=True, exist_ok=True)
+                processor, model = load_model()
+                total_dets = 0
+
+                for i, name in enumerate(extracted):
+                    img = Image.open(img_dir / name).convert("RGB")
+                    dets = predict_image(processor, model, img, threshold=0.1)
+                    yolo_txt = detections_to_yolo(dets, img.width, img.height)
+                    lbl_name = name.replace(".png", ".txt")
+                    (lbl_dir / lbl_name).write_text(yolo_txt)
+                    total_dets += len(dets)
+                    on_progress(i + 1, len(extracted), f"{name}: {len(dets)} elements")
+
+                # Step 3: Write dataset.yaml
+                import yaml as yaml_mod
+
+                ds = {
+                    "path": str(training_dir.resolve()),
+                    "train": "images",
+                    "val": "images",
+                    "names": {i: c for i, c in enumerate(CLASSES)},
+                }
+                with open(training_dir / "dataset.yaml", "w") as f:
+                    yaml_mod.dump(ds, f, default_flow_style=False)
+
+                total = len(list(img_dir.glob("*.png")))
+                self._frame_update.emit(
+                    len(extracted),
+                    f"Done: +{len(extracted)} images, +{total_dets} elements "
                     f"(total: {total} images accumulated)",
                 )
             except Exception as e:
