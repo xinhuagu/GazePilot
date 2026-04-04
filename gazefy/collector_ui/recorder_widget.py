@@ -115,27 +115,38 @@ class RecorderWidget(QMainWindow):
         self._ann_row_widget.setVisible(False)
         layout.addWidget(self._ann_row_widget)
 
-        # Controls row
-        ctrl = QHBoxLayout()
+        # Controls row 1: Record
+        ctrl1 = QHBoxLayout()
         self.start_btn = QPushButton("Start")
         self.stop_btn = QPushButton("Stop")
         self.replay_btn = QPushButton("Replay")
         self.open_btn = QPushButton("Open")
-        self.annotate_btn = QPushButton("Annotate")
         self.stop_btn.setEnabled(False)
         self.replay_btn.setEnabled(False)
-        self.annotate_btn.setEnabled(False)
-        self.annotate_btn.setToolTip("Analyse video frames with VLM to fill in semantic labels")
-        for btn in [
-            self.start_btn,
-            self.stop_btn,
-            self.replay_btn,
-            self.open_btn,
-            self.annotate_btn,
-        ]:
+        for btn in [self.start_btn, self.stop_btn, self.replay_btn, self.open_btn]:
             btn.setFixedHeight(28)
-            ctrl.addWidget(btn)
-        layout.addLayout(ctrl)
+            ctrl1.addWidget(btn)
+        layout.addLayout(ctrl1)
+
+        # Controls row 2: Annotate + Train
+        ctrl2 = QHBoxLayout()
+        self.annotate_btn = QPushButton("Annotate")
+        self.train_btn = QPushButton("Train")
+        self.annotate_btn.setEnabled(False)
+        self.train_btn.setEnabled(False)
+        self.annotate_btn.setToolTip(
+            "Label all UI elements in the recording.\n"
+            "GroundingDINO for bboxes, OCR for text, VLM for icons.\n"
+            "Results are appended to the pack's training data."
+        )
+        self.train_btn.setToolTip(
+            "Train YOLO on all accumulated training data.\n"
+            "Each session's annotations stack — model gets better over time."
+        )
+        for btn in [self.annotate_btn, self.train_btn]:
+            btn.setFixedHeight(28)
+            ctrl2.addWidget(btn)
+        layout.addLayout(ctrl2)
 
         # Status row
         status = QHBoxLayout()
@@ -160,6 +171,7 @@ class RecorderWidget(QMainWindow):
         self.replay_btn.clicked.connect(self._on_replay)
         self.open_btn.clicked.connect(self._on_open)
         self.annotate_btn.clicked.connect(self._on_annotate)
+        self.train_btn.clicked.connect(self._on_train)
         self.video_check.toggled.connect(self._on_video_mode_toggled)
 
     def _scan_packs(self) -> None:
@@ -434,11 +446,10 @@ class RecorderWidget(QMainWindow):
             self.element_label.setText(f"→ {self._record_path}")
 
     def _on_annotate(self) -> None:
-        """Run VLM annotation on the last video session."""
+        """Annotate video → convert to YOLO → append to pack training data."""
         if self._annotating:
             return
         if self._video_session_dir is None or not self._video_session_dir.exists():
-            # Let user pick a session directory
             from PySide6.QtWidgets import QFileDialog
 
             path = QFileDialog.getExistingDirectory(self, "Select session directory", "recordings")
@@ -446,23 +457,29 @@ class RecorderWidget(QMainWindow):
                 return
             self._video_session_dir = Path(path)
 
+        pack_name = self.pack_combo.currentText()
+        if pack_name == "(no model)":
+            self.element_label.setText("Select a pack first")
+            return
+
         self._annotating = True
         self.annotate_btn.setEnabled(False)
+        self.train_btn.setEnabled(False)
         self.start_btn.setEnabled(False)
-        self.status_label.setText("Annotating…")
+        self.status_label.setText("Annotating...")
         self.status_label.setStyleSheet("font-weight: bold; color: #FF8C00;")
 
         session_dir = self._video_session_dir
-
         detector_mode = self.detector_combo.currentData()
-        pack_name = self.pack_combo.currentText()
-        pack_dir = (Path("packs") / pack_name) if pack_name != "(no model)" else None
+        pack_dir = Path("packs") / pack_name
 
         def run() -> None:
             def on_progress(current: int, total: int, desc: str) -> None:
                 self._frame_update.emit(current, f"{current}/{total}  {desc}")
 
             try:
+                # Step 1: Annotate
+                self._frame_update.emit(0, "Step 1/2: Annotating...")
                 if detector_mode == "grounding":
                     from gazefy.core.hybrid_annotator import HybridAnnotator
 
@@ -472,21 +489,103 @@ class RecorderWidget(QMainWindow):
 
                     annotator = VideoAnnotator()
 
-                annotations = annotator.annotate_session(session_dir, on_progress=on_progress)
-                total_elements = sum(len(a.elements) for a in annotations)
-                n_ocr = sum(
-                    sum(1 for e in a.elements if "ocr" in getattr(e, "source", "vlm"))
-                    for a in annotations
+                annotator.annotate_session(session_dir, on_progress=on_progress)
+
+                # Step 2: Convert to YOLO + append to pack training data
+                self._frame_update.emit(0, "Step 2/2: Converting to YOLO...")
+                from gazefy.training.annotation_converter import (
+                    AnnotationConverter,
                 )
+
+                training_dir = pack_dir / "training_data"
+                converter = AnnotationConverter()
+                result = converter.convert(session_dir, output_dir=training_dir)
+                n_images = result.get("images", 0)
+                n_elements = result.get("elements", 0)
+
+                # Count total accumulated data
+                img_dir = training_dir / "images"
+                total = len(list(img_dir.glob("*.png"))) if img_dir.exists() else 0
+
                 self._frame_update.emit(
-                    len(annotations),
-                    f"Done: {len(annotations)} frames, {total_elements} elements "
-                    f"({n_ocr} OCR, {total_elements - n_ocr} VLM)",
+                    n_images,
+                    f"Done: +{n_images} images, +{n_elements} elements "
+                    f"(total: {total} images accumulated)",
                 )
             except Exception as e:
-                self._frame_update.emit(0, f"Annotation error: {e}")
+                self._frame_update.emit(0, f"Error: {e}")
             finally:
                 self._annotating = False
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+
+    def _on_train(self) -> None:
+        """Train YOLO on all accumulated training data in the pack."""
+        pack_name = self.pack_combo.currentText()
+        if pack_name == "(no model)":
+            self.element_label.setText("Select a pack first")
+            return
+
+        pack_dir = Path("packs") / pack_name
+        training_dir = pack_dir / "training_data"
+        dataset_yaml = training_dir / "dataset.yaml"
+
+        if not dataset_yaml.exists():
+            self.element_label.setText("No training data. Annotate first.")
+            return
+
+        self.train_btn.setEnabled(False)
+        self.annotate_btn.setEnabled(False)
+        self.start_btn.setEnabled(False)
+        self.status_label.setText("Training...")
+        self.status_label.setStyleSheet("font-weight: bold; color: #FF8C00;")
+
+        def run() -> None:
+            try:
+                # Prep: split into train/val
+                self._frame_update.emit(0, "Splitting train/val...")
+                from gazefy.training.dataset_prep import split_dataset
+
+                split_dataset(training_dir, split_ratio=0.8)
+
+                # Train
+                self._frame_update.emit(0, "Training YOLO (this takes a few minutes)...")
+                from gazefy.training.trainer import PackTrainer, TrainConfig
+
+                config = TrainConfig(
+                    dataset_yaml=str(dataset_yaml),
+                    imgsz=640,
+                    epochs=50,
+                    batch=8,
+                    device="mps",
+                )
+                trainer = PackTrainer(config)
+                result = trainer.train()
+
+                # Package: update model in pack
+                import shutil
+
+                model_src = Path(result.best_model_path)
+                if not model_src.exists():
+                    # Ultralytics may put it elsewhere
+                    import glob
+
+                    candidates = glob.glob("**/best.pt", recursive=True)
+                    if candidates:
+                        model_src = Path(sorted(candidates)[-1])
+
+                if model_src.exists():
+                    shutil.copy2(model_src, pack_dir / "model.pt")
+
+                map50 = result.metrics.get("metrics/mAP50(B)", "?")
+                self._frame_update.emit(
+                    1, f"Training done! mAP@0.5={map50} Model saved to {pack_dir}/model.pt"
+                )
+            except Exception as e:
+                self._frame_update.emit(0, f"Training error: {e}")
+            finally:
+                pass
 
         t = threading.Thread(target=run, daemon=True)
         t.start()
@@ -693,36 +792,32 @@ class RecorderWidget(QMainWindow):
     # --- UI updates ---
 
     def _on_frame_update(self, count: int, desc: str) -> None:
-        if self.video_check.isChecked() and self._annotating:
-            # During annotation: show progress in status, count in frame_label
-            self.frame_label.setText(f"Ann: {count}")
-            if desc.startswith("Done:"):
-                self.status_label.setText(desc)
-                self.status_label.setStyleSheet("font-weight: bold; color: green;")
-                self.annotate_btn.setEnabled(True)
-                self.start_btn.setEnabled(True)
-                self._annotating = False
-            elif desc.startswith("Annotation error"):
-                self.status_label.setText(desc)
-                self.status_label.setStyleSheet("font-weight: bold; color: red;")
-                self.annotate_btn.setEnabled(True)
-                self.start_btn.setEnabled(True)
-                self._annotating = False
-            else:
-                self.element_label.setText(desc)
+        self.element_label.setText(desc)
+
+        # Detect completion signals
+        if desc.startswith("Done:") or desc.startswith("Training done"):
+            self.status_label.setText(desc[:60])
+            self.status_label.setStyleSheet("font-weight: bold; color: green;")
+            self.annotate_btn.setEnabled(True)
+            self.train_btn.setEnabled(True)
+            self.start_btn.setEnabled(True)
+            self._annotating = False
+        elif desc.startswith("Error:") or desc.startswith("Training error"):
+            self.status_label.setText(desc[:60])
+            self.status_label.setStyleSheet("font-weight: bold; color: red;")
+            self.annotate_btn.setEnabled(True)
+            self.train_btn.setEnabled(True)
+            self.start_btn.setEnabled(True)
+            self._annotating = False
+        elif desc == "done":
+            self.status_label.setText("Replay done")
+            self.status_label.setStyleSheet("font-weight: bold; color: #333;")
+            self.replay_btn.setEnabled(True)
+            self.start_btn.setEnabled(True)
         elif self.video_check.isChecked():
-            # During video recording: show click count
             self.frame_label.setText(f"Clicks: {count}")
-            self.element_label.setText(desc)
         else:
             self.frame_label.setText(f"Frames: {count}")
-            if desc == "done":
-                self.status_label.setText("Replay done")
-                self.status_label.setStyleSheet("font-weight: bold; color: #333;")
-                self.replay_btn.setEnabled(True)
-                self.start_btn.setEnabled(True)
-            else:
-                self.element_label.setText(desc)
 
     def _update_elapsed(self) -> None:
         if self._recording:
