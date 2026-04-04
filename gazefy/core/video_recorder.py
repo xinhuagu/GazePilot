@@ -179,11 +179,12 @@ class VideoRecorder:
             self._events.append({"t": t, "x": int(x), "y": int(y)})
 
         def on_click(x: float, y: float, button, pressed: bool) -> None:
-            if not self._recording or not pressed:
+            if not self._recording:
                 return
             t = round(time.monotonic() - self._start_time, 3)
             btn = "left" if button == mouse.Button.left else "right"
-            ev = {"t": t, "x": int(x), "y": int(y), "click": btn}
+            action = "press" if pressed else "release"
+            ev = {"t": t, "x": int(x), "y": int(y), "click": btn, "action": action}
             self._events.append(ev)
             if self._on_click:
                 self._on_click(ev)

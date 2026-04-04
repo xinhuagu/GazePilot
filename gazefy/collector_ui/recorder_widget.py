@@ -671,7 +671,11 @@ class RecorderWidget(QMainWindow):
         def on_click(ev: dict) -> None:
             try:
                 if ev.get("click"):
-                    desc = f"CLICK {ev['click']} ({ev['x']},{ev['y']})"
+                    action = ev.get("action", "press")
+                    if action == "release":
+                        desc = f"RELEASE {ev['click']} ({ev['x']},{ev['y']})"
+                    else:
+                        desc = f"CLICK {ev['click']} ({ev['x']},{ev['y']})"
                 elif ev.get("scroll"):
                     desc = f"SCROLL {ev['scroll']} dy={ev['dy']} ({ev['x']},{ev['y']})"
                 else:
@@ -1112,15 +1116,31 @@ class RecorderWidget(QMainWindow):
                 continue
 
             click = ev.get("click", "")
+            action = ev.get("action", "press")  # press/release
             scroll = ev.get("scroll", "")
 
             if click:
                 pyautogui.moveTo(x, y, _pause=False)
-                if click == "right":
+                if action == "release":
+                    pyautogui.mouseUp(x, y, button=click, _pause=False)
+                    self._frame_update.emit(i + 1, f"RELEASE {click} ({x},{y})")
+                elif click == "right":
                     pyautogui.rightClick(x, y, _pause=False)
+                    self._frame_update.emit(i + 1, f"CLICK {click} ({x},{y})")
                 else:
-                    pyautogui.click(x, y, _pause=False)
-                self._frame_update.emit(i + 1, f"CLICK {click} ({x},{y})")
+                    # Check if next event is a release at different position (drag)
+                    is_drag = False
+                    for j in range(i + 1, min(i + 50, len(self._frames))):
+                        nxt = self._frames[j]
+                        if nxt.get("click") == click and nxt.get("action") == "release":
+                            is_drag = abs(nxt["x"] - x) > 5 or abs(nxt["y"] - y) > 5
+                            break
+                    if is_drag:
+                        pyautogui.mouseDown(x, y, button=click, _pause=False)
+                        self._frame_update.emit(i + 1, f"DRAG START ({x},{y})")
+                    else:
+                        pyautogui.click(x, y, _pause=False)
+                        self._frame_update.emit(i + 1, f"CLICK {click} ({x},{y})")
             elif scroll:
                 pyautogui.moveTo(x, y, _pause=False)
                 raw_dy = ev.get("dy", 0)
