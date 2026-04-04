@@ -31,10 +31,14 @@ class OverlayWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
-        # Repaint timer
+        # Repaint timer — also re-raise to stay on top
         self._timer = QTimer()
-        self._timer.timeout.connect(self.update)
+        self._timer.timeout.connect(self._repaint)
         self._timer.start(100)  # 10 Hz repaint
+
+    def _repaint(self) -> None:
+        self.raise_()
+        self.update()
 
     def set_region(self, left: int, top: int, width: int, height: int) -> None:
         """Position the overlay to cover the target window."""

@@ -694,17 +694,9 @@ class RecorderWidget(QMainWindow):
         if elements:
             # Full element update — coords already in screen space
             self._overlay.set_elements(elements, cursor_id, retina_scale=1.0)
-            # Cover full screen so overlay can draw anywhere
-            from PySide6.QtWidgets import QApplication
-
-            screen = QApplication.primaryScreen()
-            if screen:
-                g = screen.geometry()
-                self._overlay.set_region(g.x(), g.y(), g.width(), g.height())
         else:
             # Just cursor update
             self._overlay._cursor_element_id = cursor_id
-            self._overlay.update()
 
     def _on_start(self) -> None:
         if self._recording:
