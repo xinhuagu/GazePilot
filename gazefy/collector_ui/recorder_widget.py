@@ -777,171 +777,21 @@ class RecorderWidget(QMainWindow):
         self.status_label.setText("Annotating...")
         self.status_label.setStyleSheet("font-weight: bold; color: #FF8C00;")
 
-        session_dir = self._video_session_dir
-        self.detector_combo.currentData()
         pack_dir = self._ensure_pack(pack_name)
 
         def run() -> None:
-            def on_progress(current: int, total: int, desc: str) -> None:
-                self._frame_update.emit(current, f"{current}/{total}  {desc}")
-
             try:
-                # Step 1: Extract frames from video
-                self._frame_update.emit(0, "Step 1/3: Extracting frames...")
-                import cv2
+                from gazefy.core.annotate_pipeline import run_annotate
 
-                video_path = session_dir / "video.mp4"
-                cap = cv2.VideoCapture(str(video_path))
-                fps = cap.get(cv2.CAP_PROP_FPS) or 10
-                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                extract_interval = max(1, int(fps * 3))  # Every 3 seconds
-
-                training_dir = pack_dir / "training_data"
-                img_dir = training_dir / "images"
-                img_dir.mkdir(parents=True, exist_ok=True)
-
-                extracted = []
-                frame_idx = 0
-                while True:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                    if frame_idx % extract_interval == 0:
-                        import datetime as dt
-
-                        ts = dt.datetime.now().strftime("%Y%m%d%H%M%S")
-                        name = f"frame_{ts}_{frame_idx:04d}.png"
-                        cv2.imwrite(str(img_dir / name), frame)
-                        extracted.append(name)
-                        on_progress(
-                            len(extracted),
-                            total_frames // extract_interval,
-                            f"Extracted {name}",
-                        )
-                    frame_idx += 1
-                cap.release()
-
-                # Step 2: GroundingDINO bbox + OCR text + VLM for icons
-                self._frame_update.emit(
-                    0,
-                    f"Step 2/3: Labeling {len(extracted)} frames...",
+                result = run_annotate(
+                    pack_dir,
+                    on_progress=lambda msg: self._frame_update.emit(0, msg),
                 )
-                from PIL import Image
-
-                from gazefy.detection.grounding_label import (
-                    CLASSES,
-                    detections_to_yolo,
-                    load_model,
-                    predict_image,
-                )
-
-                lbl_dir = training_dir / "labels"
-                lbl_dir.mkdir(parents=True, exist_ok=True)
-                processor, gd_model = load_model()
-
-                # OCR for text elements
-                from gazefy.detection.ocr import ElementOCR
-
-                ocr = ElementOCR()
-
-                # VLM for icon elements (no text)
-                from gazefy.llm.copilot import CopilotClient
-
-                vlm = CopilotClient(model="gpt-4o")
-
-                # icon_labels accumulator
-                icon_labels_path = pack_dir / "icon_labels.json"
-                icon_labels = {}
-                if icon_labels_path.exists():
-                    icon_labels = json.loads(icon_labels_path.read_text())
-
-                total_dets = 0
-                total_vlm = 0
-
-                for i, name in enumerate(extracted):
-                    img = Image.open(img_dir / name).convert("RGB")
-                    dets = predict_image(processor, gd_model, img, threshold=0.1)
-
-                    # OCR each detection
-                    import numpy as np
-
-                    img_np = np.array(img)
-                    for det in dets:
-                        bbox = det["bbox"]
-                        text = ocr.read_element_text(img_np, (bbox[0], bbox[1], bbox[2], bbox[3]))
-                        if text:
-                            det["ocr_text"] = text
-
-                    # VLM for detections without OCR text (icons)
-                    icons_to_label = [d for d in dets if not d.get("ocr_text")]
-                    if icons_to_label:
-                        # Batch: send frame + ask for all icons
-                        import base64
-
-                        _, buf = cv2.imencode(".jpg", img_np[:, :, ::-1])
-                        frame_b64 = base64.b64encode(buf).decode()
-                        icon_desc = ", ".join(
-                            f"#{j + 1} at ({d['bbox'][0]},{d['bbox'][1]})"
-                            for j, d in enumerate(icons_to_label)
-                        )
-                        try:
-                            vlm_resp = vlm.chat_with_image(
-                                f"This UI screenshot has {len(icons_to_label)} "
-                                f"icon elements without text labels: {icon_desc}. "
-                                "For each, reply with a short label. "
-                                "Format: #1: Label, #2: Label, ...",
-                                frame_b64,
-                                max_tokens=200,
-                            )
-                            # Parse "#1: Paintbrush, #2: Eraser"
-                            import re
-
-                            for m in re.finditer(r"#(\d+):\s*(.+?)(?:,|$)", vlm_resp):
-                                idx = int(m.group(1)) - 1
-                                label = m.group(2).strip()
-                                if 0 <= idx < len(icons_to_label):
-                                    icons_to_label[idx]["vlm_label"] = label
-                                    total_vlm += 1
-                        except Exception as e:
-                            on_progress(
-                                i + 1,
-                                len(extracted),
-                                f"VLM error (continuing): {e}",
-                            )
-
-                    yolo_txt = detections_to_yolo(dets, img.width, img.height)
-                    lbl_name = name.replace(".png", ".txt")
-                    (lbl_dir / lbl_name).write_text(yolo_txt)
-                    total_dets += len(dets)
-
-                    n_ocr = sum(1 for d in dets if d.get("ocr_text"))
-                    on_progress(
-                        i + 1,
-                        len(extracted),
-                        f"{name}: {len(dets)} elements ({n_ocr} OCR, {len(icons_to_label)} VLM)",
-                    )
-
-                # Save icon labels
-                if icon_labels:
-                    icon_labels_path.write_text(json.dumps(icon_labels, indent=2))
-
-                # Step 3: Write dataset.yaml
-                import yaml as yaml_mod
-
-                ds = {
-                    "path": str(training_dir.resolve()),
-                    "train": "images",
-                    "val": "images",
-                    "names": {i: c for i, c in enumerate(CLASSES)},
-                }
-                with open(training_dir / "dataset.yaml", "w") as f:
-                    yaml_mod.dump(ds, f, default_flow_style=False)
-
-                total = len(list(img_dir.glob("*.png")))
                 self._frame_update.emit(
-                    len(extracted),
-                    f"Done: +{len(extracted)} images, +{total_dets} elements "
-                    f"(total: {total} images accumulated)",
+                    result["total_images"],
+                    f"Done: {result['total_images']} images, "
+                    f"{result['labeled']} newly labeled, "
+                    f"{result['total_elements']} elements",
                 )
             except Exception as e:
                 self._frame_update.emit(0, f"Error: {e}")
