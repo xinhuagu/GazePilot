@@ -10,9 +10,11 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Gazefy: AI-driven screen automation")
     sub = parser.add_subparsers(dest="command")
 
-    # --- collector-ui ---
+    # --- learn (main UI: record + monitor + annotate + train) ---
+    sub.add_parser("learn", help="Open the Gazefy control panel (record, monitor, annotate, train)")
+
+    # --- collector-ui (legacy) ---
     sub.add_parser("collector", help="Open the Gazefy Collector UI")
-    sub.add_parser("recorder", help="Open the floating Recorder widget")
 
     # --- list-windows ---
     sub.add_parser("list-windows", help="List visible macOS windows")
@@ -22,16 +24,6 @@ def main(argv: list[str] | None = None) -> None:
     bench_p.add_argument("--window", type=str, help="Window name to benchmark")
     bench_p.add_argument("--region", type=str, help="Manual region: left,top,width,height")
     bench_p.add_argument("--duration", type=float, default=5.0, help="Duration in seconds")
-
-    # --- monitor ---
-    monitor_p = sub.add_parser("monitor", help="Real-time cursor-to-element monitoring")
-    monitor_p.add_argument("--window", type=str, help="Window name to monitor")
-    monitor_p.add_argument("--region", type=str, help="Manual region: left,top,width,height")
-    monitor_p.add_argument("--pack", type=str, default="", help="Force a specific pack")
-    monitor_p.add_argument("--packs-dir", type=str, default="packs")
-    monitor_p.add_argument("--retina-scale", type=float, default=2.0)
-    monitor_p.add_argument("--record", action="store_true", help="Record cursor trajectory")
-    monitor_p.add_argument("--record-dir", type=str, default="recordings")
 
     # --- replay ---
     replay_p = sub.add_parser("replay", help="Replay a recorded cursor trajectory")
@@ -166,15 +158,15 @@ def main(argv: list[str] | None = None) -> None:
 
     args = parser.parse_args(argv)
 
-    if args.command == "collector":
+    if args.command == "learn":
+        from gazefy.collector_ui.recorder_widget import main as learn_main
+
+        learn_main()
+
+    elif args.command == "collector":
         from gazefy.collector_ui.main_window import main as ui_main
 
         ui_main()
-
-    elif args.command == "recorder":
-        from gazefy.collector_ui.recorder_widget import main as rec_main
-
-        rec_main()
 
     elif args.command == "list-windows":
         from gazefy.capture.window_finder import print_windows
@@ -197,19 +189,6 @@ def main(argv: list[str] | None = None) -> None:
         bench.benchmark_change_detection(region, num_frames=200)
         bench.benchmark_threaded_capture(region, duration=args.duration)
         print(f"\n{'=' * 60}\nBENCHMARK COMPLETE\n{'=' * 60}")
-
-    elif args.command == "monitor":
-        from gazefy.core.monitor import run_monitor
-
-        region = _resolve_region(args)
-        run_monitor(
-            region=region,
-            pack_name=args.pack,
-            packs_dir=args.packs_dir,
-            retina_scale=args.retina_scale,
-            record=args.record,
-            record_dir=args.record_dir,
-        )
 
     elif args.command == "record-video":
         import datetime

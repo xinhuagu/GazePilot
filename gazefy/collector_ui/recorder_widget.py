@@ -7,7 +7,7 @@ Video mode: records screen as MP4 + click events (no YOLO required).
 Annotate: after recording, VLM analyses video frames at each click → fills semantic labels.
 
 ┌──────────────────────────────────────────┐
-│ Gazefy Recorder                 ● REC   │
+│ Gazefy                 ● REC   │
 │ Pack: [_________]      [☑ Video mode]   │
 │ [Start] [Stop] [Replay] [Open] [Annotate]│
 │ Frames: 0   00:00                        │
@@ -75,7 +75,7 @@ class RecorderWidget(QMainWindow):
         self._scan_packs()
 
     def _init_ui(self) -> None:
-        self.setWindowTitle("Gazefy Recorder")
+        self.setWindowTitle("Gazefy")
         self.setMinimumSize(480, 140)
         self.setMaximumWidth(600)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
@@ -948,7 +948,7 @@ class RecorderWidget(QMainWindow):
 
 def main() -> None:
     app = QApplication(sys.argv)
-    app.setApplicationName("Gazefy Recorder")
+    app.setApplicationName("Gazefy")
     w = RecorderWidget()
     w.show()
     sys.exit(app.exec())
