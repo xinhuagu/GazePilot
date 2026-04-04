@@ -35,12 +35,7 @@ def run_annotate(
     import numpy as np
     from PIL import Image
 
-    from gazefy.detection.grounding_label import (
-        CLASSES,
-        detections_to_yolo,
-        load_model,
-        predict_image,
-    )
+    from gazefy.detection.grounding_label import CLASSES, detections_to_yolo
     from gazefy.detection.ocr import ElementOCR
 
     def log(msg: str) -> None:
@@ -91,7 +86,22 @@ def run_annotate(
 
     total_dets = 0
     if to_label:
-        processor, gd_model = load_model()
+        # Choose detector: YOLO if pack has model, else GroundingDINO
+        use_yolo = (pack_dir / "model.pt").exists()
+        if use_yolo:
+            from gazefy.core.application_pack import ApplicationPack
+            from gazefy.detection.detector import UIDetector
+
+            pack = ApplicationPack.load(pack_dir)
+            yolo_det = UIDetector(pack)
+            yolo_det.load_model()
+            log("  Using trained YOLO model (precise bboxes)")
+        else:
+            from gazefy.detection.grounding_label import load_model, predict_image
+
+            processor, gd_model = load_model()
+            log("  Using GroundingDINO (no trained model)")
+
         ocr = ElementOCR()
 
         # VLM for icons
@@ -110,10 +120,27 @@ def run_annotate(
 
         for i, name in enumerate(to_label):
             img = Image.open(img_dir / name).convert("RGB")
-            dets = predict_image(processor, gd_model, img, threshold=0.1)
+            img_np = np.array(img)
+
+            if use_yolo:
+                # YOLO detection → convert to same dict format
+                import cv2 as cv2_inner
+
+                frame_bgra = cv2_inner.cvtColor(img_np, cv2_inner.COLOR_RGB2BGRA)
+                raw_dets = yolo_det.detect(frame_bgra)
+                dets = [
+                    {
+                        "class_id": d.class_id,
+                        "class_name": d.class_name,
+                        "confidence": d.confidence,
+                        "bbox": (d.bbox.x1, d.bbox.y1, d.bbox.x2, d.bbox.y2),
+                    }
+                    for d in raw_dets
+                ]
+            else:
+                dets = predict_image(processor, gd_model, img, threshold=0.1)
 
             # OCR each detection
-            img_np = np.array(img)
             n_ocr = 0
             for det in dets:
                 bbox = det["bbox"]
