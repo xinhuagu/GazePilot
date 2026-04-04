@@ -207,17 +207,28 @@ class VideoRecorder:
         # Sort events by time before writing
         self._events.sort(key=lambda e: e["t"])
 
+        def _sanitize(obj):
+            """Convert numpy types to Python natives for JSON."""
+            if isinstance(obj, dict):
+                return {k: _sanitize(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [_sanitize(v) for v in obj]
+            if hasattr(obj, "__float__"):
+                f = float(obj)
+                return int(f) if f == int(f) else f
+            return obj
+
         events_path = session_dir / "events.jsonl"
         with open(events_path, "w") as f:
             for ev in self._events:
-                f.write(json.dumps(ev) + "\n")
+                f.write(json.dumps(_sanitize(ev)) + "\n")
 
         times_path = session_dir / "frame_times.json"
-        times_path.write_text(json.dumps(self._frame_times))
+        times_path.write_text(json.dumps(_sanitize(self._frame_times)))
 
         # Save per-frame window rects
         windows_path = session_dir / "frame_windows.json"
-        windows_path.write_text(json.dumps(self._frame_windows))
+        windows_path.write_text(json.dumps(_sanitize(self._frame_windows)))
 
     # --- properties for UI ---
 
