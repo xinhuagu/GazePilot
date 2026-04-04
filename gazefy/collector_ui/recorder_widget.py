@@ -241,6 +241,17 @@ class RecorderWidget(QMainWindow):
         self.element_label.setStyleSheet("color: #4CAF50; font-size: 12px;")
         layout.addWidget(self.element_label)
 
+        # Log area (scrollable, selectable, copyable)
+        from PySide6.QtWidgets import QTextEdit
+
+        self.log_area = QTextEdit()
+        self.log_area.setReadOnly(True)
+        self.log_area.setFixedHeight(120)
+        self.log_area.setStyleSheet(
+            "background-color: #1a1a1a; color: #ccc; font-family: Menlo; font-size: 11px;"
+        )
+        layout.addWidget(self.log_area)
+
         # Signals
         self.start_btn.clicked.connect(self._on_start)
         self.stop_btn.clicked.connect(self._on_stop)
@@ -1234,6 +1245,11 @@ class RecorderWidget(QMainWindow):
 
     # --- UI updates ---
 
+    def _log(self, msg: str) -> None:
+        """Append a line to the log area and auto-scroll."""
+        self.log_area.append(msg)
+        self.log_area.verticalScrollBar().setValue(self.log_area.verticalScrollBar().maximum())
+
     def _on_progress(self, current: int, total: int, desc: str) -> None:
         """Update progress bar from background thread."""
         if total > 0:
@@ -1242,9 +1258,11 @@ class RecorderWidget(QMainWindow):
             self.progress_bar.setValue(current)
         if current >= total and total > 0:
             self.progress_bar.setVisible(False)
+        self._log(desc)
 
     def _on_frame_update(self, count: int, desc: str) -> None:
         self.element_label.setText(desc)
+        self._log(desc)
 
         if desc.startswith("Done:") or desc.startswith("Training done"):
             self.status_label.setText(desc[:60])
