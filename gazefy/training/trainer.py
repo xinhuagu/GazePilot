@@ -74,6 +74,11 @@ class PackTrainer:
             device=self._config.device,
             project=self._config.project,
             name=self._config.name,
+            # Augmentation for window size invariance
+            scale=0.5,  # Random scale ±50% (simulates window resize)
+            mosaic=1.0,  # Mosaic augmentation (combines 4 images)
+            flipud=0.0,  # No vertical flip (UI layout is orientation-dependent)
+            fliplr=0.0,  # No horizontal flip
         )
 
         best_path = Path(self._config.project) / self._config.name / "weights" / "best.pt"
