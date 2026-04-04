@@ -390,9 +390,12 @@ class RecorderWidget(QMainWindow):
 
                 self._detector = UIDetector(pack)
                 self._detector.load_model()
+                self._log(f"Loaded YOLO model: {pack.model_path}")
                 self.element_label.setText(f"Loaded YOLO: {self._pack_name}")
             else:
                 self._detector = _GroundingDINOWrapper()
+                self._detector.load_model()
+                self._log("No trained model — using GroundingDINO (slower)")
                 self.element_label.setText("No model — using GroundingDINO (slower)")
 
             self._ocr = ElementOCR()
@@ -408,20 +411,27 @@ class RecorderWidget(QMainWindow):
             self.element_label.setText(f"Load failed: {e}")
             return False
 
-    def _detect_and_ocr(self, frame) -> None:
+    def _detect_and_ocr(self, frame, force_rebuild: bool = False) -> None:
         """Run detection + OCR on a frame, update UIMap with stable text."""
         if self._detector is None:
             return
         from gazefy.capture.change_detector import ChangeLevel, ChangeResult
 
         detections = self._detector.detect(frame)
-
         h, w = frame.shape[:2]
-        change = ChangeResult(changed=True, change_level=ChangeLevel.MAJOR)
-        self._tracker.update(detections, change, frame_width=w, frame_height=h)
-        # Bootstrap stability
-        change2 = ChangeResult(changed=True, change_level=ChangeLevel.MINOR)
-        self._tracker.update(detections, change2, frame_width=w, frame_height=h)
+
+        # First detection or forced: MAJOR rebuild. Otherwise: MINOR (IoU match)
+        is_first = self._ui_map is None or self._ui_map.is_empty
+        if is_first or force_rebuild:
+            change = ChangeResult(changed=True, change_level=ChangeLevel.MAJOR)
+            self._tracker.update(detections, change, frame_width=w, frame_height=h)
+            # Bootstrap stability
+            change2 = ChangeResult(changed=True, change_level=ChangeLevel.MINOR)
+            self._tracker.update(detections, change2, frame_width=w, frame_height=h)
+        else:
+            # Incremental: preserves element IDs and cached text
+            change = ChangeResult(changed=True, change_level=ChangeLevel.MINOR)
+            self._tracker.update(detections, change, frame_width=w, frame_height=h)
 
         # OCR only elements that don't have cached text yet
         if self._ocr and self._tracker.current_map.elements:
