@@ -807,9 +807,9 @@ class RecorderWidget(QMainWindow):
 
                 training_dir = pack_dir / "training_data"
                 converter = AnnotationConverter()
-                result = converter.convert(session_dir, output_dir=training_dir)
-                n_images = result.get("images", 0)
-                n_elements = result.get("elements", 0)
+                result = converter.convert_session(session_dir, output_dir=training_dir)
+                n_images = result.n_images
+                n_elements = result.n_elements
 
                 # Count total accumulated data
                 img_dir = training_dir / "images"
