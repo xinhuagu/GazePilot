@@ -188,7 +188,19 @@ class VideoRecorder:
             if self._on_click:
                 self._on_click(ev)
 
-        self._mouse_listener = mouse.Listener(on_move=on_move, on_click=on_click)
+        def on_scroll(x: float, y: float, dx: int, dy: int) -> None:
+            if not self._recording:
+                return
+            t = round(time.monotonic() - self._start_time, 3)
+            direction = "up" if dy > 0 else "down"
+            ev = {"t": t, "x": int(x), "y": int(y), "scroll": direction, "dy": dy}
+            self._events.append(ev)
+            if self._on_click:
+                self._on_click(ev)
+
+        self._mouse_listener = mouse.Listener(
+            on_move=on_move, on_click=on_click, on_scroll=on_scroll
+        )
         self._mouse_listener.start()
 
     def _flush(self, session_dir: Path) -> None:

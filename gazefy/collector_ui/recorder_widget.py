@@ -993,7 +993,21 @@ class RecorderWidget(QMainWindow):
                 desc = f'CLICK {btn} [{el_desc}] "{el_text}"' if el_desc else f"CLICK {btn}"
                 self._frame_update.emit(len(self._frames), desc)
 
-        listener = mouse.Listener(on_click=on_click)
+        def on_scroll(x, y, dx, dy):
+            if not self._recording:
+                return
+            t = time.monotonic() - self._record_start
+            direction = "up" if dy > 0 else "down"
+            frame = {"t": round(t, 3), "x": int(x), "y": int(y), "scroll": direction, "dy": dy}
+            if has_model:
+                el = self._resolve_element(float(x), float(y))
+                frame.update(el)
+            self._frames.append(frame)
+            el_desc = frame.get("element_class", "")
+            desc = f"SCROLL {direction} [{el_desc}]" if el_desc else f"SCROLL {direction}"
+            self._frame_update.emit(len(self._frames), desc)
+
+        listener = mouse.Listener(on_click=on_click, on_scroll=on_scroll)
         listener.start()
 
         # Position polling
