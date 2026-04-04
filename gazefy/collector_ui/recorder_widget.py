@@ -821,10 +821,10 @@ class RecorderWidget(QMainWindow):
                     frame_idx += 1
                 cap.release()
 
-                # Step 2: Auto-label with GroundingDINO (local, no API)
+                # Step 2: GroundingDINO bbox + OCR text + VLM for icons
                 self._frame_update.emit(
                     0,
-                    f"Step 2/3: Labeling {len(extracted)} frames (GroundingDINO)...",
+                    f"Step 2/3: Labeling {len(extracted)} frames...",
                 )
                 from PIL import Image
 
@@ -837,17 +837,93 @@ class RecorderWidget(QMainWindow):
 
                 lbl_dir = training_dir / "labels"
                 lbl_dir.mkdir(parents=True, exist_ok=True)
-                processor, model = load_model()
+                processor, gd_model = load_model()
+
+                # OCR for text elements
+                from gazefy.detection.ocr import ElementOCR
+
+                ocr = ElementOCR()
+
+                # VLM for icon elements (no text)
+                from gazefy.llm.copilot import CopilotClient
+
+                vlm = CopilotClient(model="gpt-4o")
+
+                # icon_labels accumulator
+                icon_labels_path = pack_dir / "icon_labels.json"
+                icon_labels = {}
+                if icon_labels_path.exists():
+                    icon_labels = json.loads(icon_labels_path.read_text())
+
                 total_dets = 0
+                total_vlm = 0
 
                 for i, name in enumerate(extracted):
                     img = Image.open(img_dir / name).convert("RGB")
-                    dets = predict_image(processor, model, img, threshold=0.1)
+                    dets = predict_image(processor, gd_model, img, threshold=0.1)
+
+                    # OCR each detection
+                    import numpy as np
+
+                    img_np = np.array(img)
+                    for det in dets:
+                        bbox = det["bbox"]
+                        text = ocr.read_element_text(img_np, (bbox[0], bbox[1], bbox[2], bbox[3]))
+                        if text:
+                            det["ocr_text"] = text
+
+                    # VLM for detections without OCR text (icons)
+                    icons_to_label = [d for d in dets if not d.get("ocr_text")]
+                    if icons_to_label:
+                        # Batch: send frame + ask for all icons
+                        import base64
+
+                        _, buf = cv2.imencode(".jpg", img_np[:, :, ::-1])
+                        frame_b64 = base64.b64encode(buf).decode()
+                        icon_desc = ", ".join(
+                            f"#{j + 1} at ({d['bbox'][0]},{d['bbox'][1]})"
+                            for j, d in enumerate(icons_to_label)
+                        )
+                        try:
+                            vlm_resp = vlm.chat_with_image(
+                                f"This UI screenshot has {len(icons_to_label)} "
+                                f"icon elements without text labels: {icon_desc}. "
+                                "For each, reply with a short label. "
+                                "Format: #1: Label, #2: Label, ...",
+                                frame_b64,
+                                max_tokens=200,
+                            )
+                            # Parse "#1: Paintbrush, #2: Eraser"
+                            import re
+
+                            for m in re.finditer(r"#(\d+):\s*(.+?)(?:,|$)", vlm_resp):
+                                idx = int(m.group(1)) - 1
+                                label = m.group(2).strip()
+                                if 0 <= idx < len(icons_to_label):
+                                    icons_to_label[idx]["vlm_label"] = label
+                                    total_vlm += 1
+                        except Exception as e:
+                            on_progress(
+                                i + 1,
+                                len(extracted),
+                                f"VLM error (continuing): {e}",
+                            )
+
                     yolo_txt = detections_to_yolo(dets, img.width, img.height)
                     lbl_name = name.replace(".png", ".txt")
                     (lbl_dir / lbl_name).write_text(yolo_txt)
                     total_dets += len(dets)
-                    on_progress(i + 1, len(extracted), f"{name}: {len(dets)} elements")
+
+                    n_ocr = sum(1 for d in dets if d.get("ocr_text"))
+                    on_progress(
+                        i + 1,
+                        len(extracted),
+                        f"{name}: {len(dets)} elements ({n_ocr} OCR, {len(icons_to_label)} VLM)",
+                    )
+
+                # Save icon labels
+                if icon_labels:
+                    icon_labels_path.write_text(json.dumps(icon_labels, indent=2))
 
                 # Step 3: Write dataset.yaml
                 import yaml as yaml_mod
