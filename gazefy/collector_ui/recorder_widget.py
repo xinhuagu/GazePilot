@@ -128,6 +128,7 @@ class RecorderWidget(QMainWindow):
         self.start_btn = QPushButton("Start")
         self.stop_btn = QPushButton("Stop")
         self.replay_btn = QPushButton("Replay")
+        self.replay_btn.setToolTip("Replay mouse actions (move + click + scroll)")
         self.open_btn = QPushButton("Open")
         self.stop_btn.setEnabled(False)
         self.replay_btn.setEnabled(False)
@@ -706,7 +707,7 @@ class RecorderWidget(QMainWindow):
             self._video_recorder = None
             self.start_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
-            self.replay_btn.setEnabled(False)
+            self.replay_btn.setEnabled(True)
             self.annotate_btn.setEnabled(True)
             self.window_combo.setEnabled(True)
             self.status_label.setText(f"Saved ({n_clicks} clicks)")
@@ -886,8 +887,18 @@ class RecorderWidget(QMainWindow):
         t.start()
 
     def _on_replay(self) -> None:
-        if self._replaying or not self._frames:
+        if self._replaying:
             return
+
+        # Load events from video session
+        if self._video_session_dir and (self._video_session_dir / "events.jsonl").exists():
+            with open(self._video_session_dir / "events.jsonl") as f:
+                self._frames = [json.loads(line) for line in f if line.strip()]
+
+        if not self._frames:
+            self.element_label.setText("No events to replay")
+            return
+
         self._replaying = True
         self.replay_btn.setEnabled(False)
         self.start_btn.setEnabled(False)
@@ -1003,6 +1014,7 @@ class RecorderWidget(QMainWindow):
         listener.stop()
 
     def _replay_loop(self) -> None:
+        """Replay all mouse actions: move + click + scroll."""
         try:
             import pyautogui
 
@@ -1010,57 +1022,33 @@ class RecorderWidget(QMainWindow):
         except ImportError:
             return
 
-        # For semantic replay, load model and detect current screen
-        has_model = self._detector is not None
-        if not has_model:
-            has_model = self._load_pipeline()
-
-        if has_model:
-            try:
-                import mss
-                import numpy as np
-
-                with mss.mss() as sct:
-                    monitor = sct.monitors[1]
-                    img = np.array(sct.grab(monitor))
-                self._detect_and_ocr(img)
-            except Exception:
-                pass
-
-        for i, frame in enumerate(self._frames):
+        for i, ev in enumerate(self._frames):
             if not self._replaying:
                 break
 
-            click = frame.get("click", "")
-            target_class = frame.get("element_class", "")
-            target_text = frame.get("text", "")
-
-            # Semantic targeting: find element by class+text
-            if target_class and has_model and self._ui_map:
-                resolved = self._find_element_by_identity(target_class, target_text)
-                if resolved:
-                    x, y = int(resolved.x), int(resolved.y)
-                else:
-                    x, y = int(frame["x"]), int(frame["y"])
-            else:
-                x, y = int(frame["x"]), int(frame["y"])
-
+            x, y = int(ev.get("x", 0)), int(ev.get("y", 0))
             if x <= 5 and y <= 5:
                 continue
+
+            click = ev.get("click", "")
+            scroll = ev.get("scroll", "")
 
             if click:
                 if click == "right":
                     pyautogui.rightClick(x, y, _pause=False)
                 else:
                     pyautogui.click(x, y, _pause=False)
-                desc = f'CLICK {click} [{target_class}] "{target_text}"'
-                self._frame_update.emit(i + 1, desc)
+                self._frame_update.emit(i + 1, f"CLICK {click} ({x},{y})")
+            elif scroll:
+                dy = ev.get("dy", 1 if scroll == "up" else -1)
+                pyautogui.scroll(dy, x, y)
+                self._frame_update.emit(i + 1, f"SCROLL {scroll} ({x},{y})")
             else:
                 pyautogui.moveTo(x, y, _pause=False)
-                self._frame_update.emit(i + 1, f"({x}, {y})")
 
+            # Wait for next event timing
             if i + 1 < len(self._frames):
-                dt = self._frames[i + 1]["t"] - frame["t"]
+                dt = self._frames[i + 1]["t"] - ev["t"]
                 if dt > 0:
                     time.sleep(dt)
 
