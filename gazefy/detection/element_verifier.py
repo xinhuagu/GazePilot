@@ -144,7 +144,12 @@ class ElementVerifier:
             VerificationReport with pass/fail status
         """
         # Check screen transition
-        if expected_screen and self._classifier:
+        if expected_screen:
+            if not self._classifier:
+                return VerificationReport(
+                    result=VerifyResult.SKIP,
+                    detail=f"Cannot verify screen '{expected_screen}': no classifier",
+                )
             state = self._classifier.classify(ui_map, self._resolver)
             if state.label != expected_screen:
                 return VerificationReport(
@@ -200,7 +205,8 @@ class ElementVerifier:
             if entry and entry.semantic_id == target:
                 # Found the element — verify its text via OCR
                 bbox = (el.bbox.x1, el.bbox.y1, el.bbox.x2, el.bbox.y2)
-                expected_text = el.text or entry.description
+                # Only use visible text for OCR verification, not semantic description
+                expected_text = el.text or ""
                 return self.verify_before_click(frame, bbox, expected_text=expected_text)
 
         # Element not found in UIMap

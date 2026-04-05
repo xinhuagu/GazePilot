@@ -128,7 +128,11 @@ class ScreenClassifier:
 
         from gazefy.tracker.ui_map import UIElement, UIMap
 
-        frame_bgra = cv2.cvtColor(frame, cv2.COLOR_BGR2BGRA)
+        # Handle both BGR (3-channel) and BGRA (4-channel) inputs
+        if frame.ndim == 3 and frame.shape[2] == 3:
+            frame_bgra = cv2.cvtColor(frame, cv2.COLOR_BGR2BGRA)
+        else:
+            frame_bgra = frame
         detections = detector.detect(frame_bgra)
         h, w = frame.shape[:2]
 
@@ -172,6 +176,11 @@ class ScreenClassifier:
                 entry = ontology_resolver.resolve(el)
                 if entry:
                     elements.append(entry.semantic_id)
+        # Fallback: use element text when no resolver available
+        if not elements:
+            for el in ui_map.elements.values():
+                if el.text:
+                    elements.append(el.text.lower().strip())
 
         sig = ScreenSignature(
             label=label,
