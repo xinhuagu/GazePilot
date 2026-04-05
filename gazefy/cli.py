@@ -33,6 +33,25 @@ def main(argv: list[str] | None = None) -> None:
     # --- list-windows ---
     sub.add_parser("list-windows", help="List visible macOS windows")
 
+    # --- generate-ontology ---
+    onto_p = sub.add_parser(
+        "generate-ontology", help="Generate ontology.yaml from annotations + manual"
+    )
+    onto_p.add_argument("session", nargs="?", help="Session dir (or auto-detect from pack)")
+    onto_p.add_argument("--pack", type=str, required=True, help="Pack name or path")
+    onto_p.add_argument("--manual", type=str, help="Path to HTML/PDF manual")
+
+    # --- extract-trace ---
+    trace_p = sub.add_parser("extract-trace", help="Extract grounded action trace from a recording")
+    trace_p.add_argument("session", help="Session dir under pack/recordings/")
+    trace_p.add_argument("--pack", type=str, help="Pack path (auto-detected if omitted)")
+
+    # --- extract-workflow ---
+    wf_p = sub.add_parser("extract-workflow", help="Extract workflow from an action trace")
+    wf_p.add_argument("session", help="Session dir containing action_trace.json")
+    wf_p.add_argument("--pack", type=str, required=True, help="Pack path")
+    wf_p.add_argument("--name", type=str, default="", help="Workflow name")
+
     # --- benchmark ---
     bench_p = sub.add_parser("benchmark", help="Run capture + change detection benchmark")
     bench_p.add_argument("--window", type=str, help="Window name to benchmark")
@@ -87,6 +106,51 @@ def main(argv: list[str] | None = None) -> None:
 
         print("Visible windows:")
         print_windows()
+
+    elif args.command == "generate-ontology":
+        import logging
+        from pathlib import Path
+
+        from gazefy.knowledge.ontology_generator import generate_ontology
+
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+        pack_path = Path(args.pack) if "/" in args.pack else Path("packs") / args.pack
+        manual = args.manual if args.manual else None
+        result = generate_ontology(pack_path, manual_path=manual, on_progress=print)
+        print(f"\nDone: {result['elements']} elements -> {result['output']}")
+
+    elif args.command == "extract-trace":
+        import logging
+        from pathlib import Path
+
+        from gazefy.knowledge.action_trace_extractor import extract_action_trace
+
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+        session_dir = Path(args.session)
+        pack_path = Path(args.pack) if args.pack else None
+        trace = extract_action_trace(session_dir, pack_dir=pack_path, on_progress=print)
+        print(f"\nDone: {len(trace)} actions extracted")
+
+    elif args.command == "extract-workflow":
+        import logging
+        from pathlib import Path
+
+        from gazefy.knowledge.task_store import TaskStore
+        from gazefy.knowledge.workflow_extractor import extract_workflow
+
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+        session_dir = Path(args.session)
+        trace_path = session_dir / "action_trace.json"
+        workflow = extract_workflow(trace_path, workflow_name=args.name, on_progress=print)
+        if workflow:
+            store = TaskStore(Path(args.pack))
+            path = store.save(workflow)
+            print(f"\nDone: saved to {path}")
+        else:
+            print("\nNo workflow extracted")
 
     elif args.command == "benchmark":
         import importlib.util
