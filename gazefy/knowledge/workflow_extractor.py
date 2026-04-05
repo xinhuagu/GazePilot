@@ -105,7 +105,7 @@ def _collapse_actions(trace: list[dict]) -> list[dict]:
                     {
                         "action": "scroll",
                         "target": prev_target,
-                        "details": {"count": scroll_count + 1},
+                        "details": {"count": scroll_count},
                     }
                 )
                 scroll_count = 0

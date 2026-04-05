@@ -262,27 +262,37 @@ def _extract_actions(events: list[dict]) -> list[dict]:
         ev = events[i]
 
         if ev.get("click") and ev.get("action") == "press":
-            # Look for matching release
+            # Scan forward for matching release (no fixed window limit)
             release = None
-            for j in range(i + 1, min(i + 5, len(events))):
+            release_idx = -1
+            for j in range(i + 1, len(events)):
                 if events[j].get("click") == ev["click"] and events[j].get("action") == "release":
                     release = events[j]
+                    release_idx = j
+                    break
+                # Give up after 2 seconds
+                if events[j]["t"] - ev["t"] > 2.0:
                     break
 
             if release:
-                # Check for double click (another press within 0.3s)
                 dt = release["t"] - ev["t"]
                 if dt < 0.5:
                     action_type = "click"
-                    # Check for double click
-                    for k in range(i + 2, min(i + 8, len(events))):
+                    # Check for double click: another press within 0.5s after release
+                    for k in range(release_idx + 1, len(events)):
                         nxt = events[k]
-                        if (
-                            nxt.get("click") == ev["click"]
-                            and nxt.get("action") == "press"
-                            and nxt["t"] - ev["t"] < 0.5
-                        ):
+                        if nxt["t"] - ev["t"] > 0.5:
+                            break
+                        if nxt.get("click") == ev["click"] and nxt.get("action") == "press":
                             action_type = "double_click"
+                            # Consume the second press+release pair
+                            for m in range(k + 1, len(events)):
+                                if (
+                                    events[m].get("click") == ev["click"]
+                                    and events[m].get("action") == "release"
+                                ):
+                                    i = m  # Skip past second release
+                                    break
                             break
                 else:
                     action_type = "drag"

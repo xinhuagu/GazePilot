@@ -60,17 +60,17 @@ def generate_ontology(
     # Step 3: Load manual for context (optional)
     parser = ManualParser()
     knowledge_dir = pack_dir / "knowledge"
-    if knowledge_dir.exists():
+    if knowledge_dir.exists() and any(knowledge_dir.rglob("*.html")):
         n = parser.load_knowledge_dir(knowledge_dir)
         log(f"Step 3: Loaded {n} manual chunks from knowledge base")
-    elif manual_path:
+    if manual_path:
         manual_path = Path(manual_path)
         if manual_path.suffix == ".pdf":
             parser.load_pdf(manual_path)
         else:
             parser.load_html_file(manual_path)
         log(f"Step 3: Loaded {len(parser)} manual chunks from {manual_path}")
-    else:
+    if len(parser) == 0:
         log("Step 3: No manual — LLM will infer from OCR/VLM context only")
 
     # Step 4: Generate ontology via LLM
