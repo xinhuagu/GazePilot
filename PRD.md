@@ -16,15 +16,15 @@ Enable AI-driven precise operation of professional software interfaces presented
 | UC1 | **Real-time cursor awareness**: System continuously reports which UI element (by name/type) the mouse cursor is currently hovering over. | P0 — V1 |
 | UC2 | **LLM-driven task execution**: User describes a task in natural language; LLM reasons over detected UI elements and executes a sequence of clicks/keystrokes to complete it. | P0 — V1 |
 | UC3 | **Training data collection**: User operates the software normally; system records screenshots + cursor actions for model training. | P0 — V1 |
-| UC4 | **Model training & iteration**: User annotates screenshots (with model-assisted pre-labeling), trains a YOLO model, evaluates, and iterates. | P0 — V1 |
+| UC4 | **Auto-label & train**: OmniParser auto-labels screenshots (zero human annotation), optional VLM review, trains a YOLO model, evaluates, and iterates. | P0 — V1 |
 | UC5 | **Application-pack runtime**: Load app-specific detector/classifier/verifier/workflow packs without changing the shared runtime. | P0 — V1 foundation |
 | UC6 | **COBOL/Virtel terminal automation**: Automate mainframe operations through a browser-based 3270 terminal emulator. | P1 — V2 |
 | UC7 | **Knowledge-enriched operation**: Parse software HTML manual to enrich LLM context with element semantics and workflow definitions. | P1 — V2 |
 | UC8 | **Drift detection**: System monitors its own detection confidence and alerts the operator when the pack is degrading due to UI changes. | P1 — V2 |
-| UC9 | **Automatic re-annotation**: When drift is detected (or triggered manually), the system captures fresh screenshots and re-annotates them using the HybridAnnotator pipeline without operator involvement. | P1 — V2 |
+| UC9 | **Automatic re-annotation**: When drift is detected (or triggered manually), the system captures fresh screenshots and re-annotates them using the OmniParser + VLM review pipeline without operator involvement. | P1 — V2 |
 | UC10 | **Verification-driven training buffer**: Confirmed clicks (screen changed) are automatically collected as positive training samples; failed clicks become hard negatives. | P1 — V2 |
-| UC11 | **Active learning on uncertainty**: Low-confidence detections are batched to Claude Vision, which provides refined labels that feed directly into the fine-tune buffer. | P2 — V2 |
-| UC12 | **VLM→YOLO distillation**: HybridAnnotator pseudo-labels from raw screenshots are converted to YOLO format and used to fine-tune the pack detector without human annotation. | P2 — V2 |
+| UC11 | **Active learning on uncertainty**: Low-confidence detections are batched to OmniParser + VLM, which provides refined labels that feed directly into the fine-tune buffer. | P2 — V2 |
+| UC12 | **VLM→YOLO distillation**: OmniParser auto-labels + VLM-reviewed pseudo-labels are converted to YOLO format and used to fine-tune the pack detector without human annotation. | P0 — V1 (core pipeline) |
 
 ## Non-Goals (explicitly out of scope)
 
@@ -33,7 +33,7 @@ Enable AI-driven precise operation of professional software interfaces presented
 - **Model training infrastructure**: No cloud training pipeline. Training happens locally or on a single GPU machine. Ultralytics CLI is sufficient.
 - **Full product GUI / dashboard**: V1 does not ship a general-purpose desktop console or web dashboard. A lightweight training-sample collector UI is in scope.
 - **Recording and replaying macros**: Gazefy is not a macro recorder. The LLM reasons about each step, adapting to screen state.
-- **Zero-annotation cold start**: The self-improving pipeline (V2) still requires an initial bootstrapped pack (100-200 annotated screenshots). Fully zero-annotation pack creation from scratch is out of scope.
+- **Manual annotation as primary workflow**: OmniParser auto-labeling replaces Label Studio as the default training data pipeline. Manual annotation is still supported as a fallback path.
 
 ## V1 Scope
 
@@ -77,7 +77,7 @@ V1 is optimized first for **VDI-hosted professional Windows applications**, beca
 | **Recovery success rate** | ≥ 80% in injected lag/stale-screen cases | Run failure-injection scenarios and measure correct recover-or-abort behavior |
 | **Cursor-to-element latency** | < 50ms after screen change | Benchmark script measures time from frame capture to UIMap update |
 | **Click precision accuracy** | ≥ 95% effective hits on benchmark controls | Compare actual effect zone hits vs ground-truth expected hotspots |
-| **Training data effort** | < 3 days from zero to working model | Clock the full cycle: collection → annotation → training → iteration |
+| **Training data effort** | < 1 day from zero to working model | Clock the full cycle: collection → OmniParser auto-label → training → iteration |
 | **Collector usability** | New user can start a capture session in < 3 minutes | Observe first-time user completing: choose window -> start session -> collect -> stop -> export |
 
 **Primary success criterion**: no unsafe destructive misfires and task success rate ≥ 95% on the fixed regression suite. mAP is a proxy — what matters is whether the system completes tasks safely and repeatably.
@@ -246,7 +246,8 @@ V1 should ship a **small desktop collector controller**, not a full product shel
 | Language | Python 3.11+ | ML ecosystem (Ultralytics, PyTorch, ONNX), rapid iteration |
 | Detection model | YOLOv8 (Ultralytics) | Best ecosystem, training CLI, export pipeline, proven for UI detection |
 | Training framework | Ultralytics API | Wraps PyTorch; handles augmentation, training, validation, export in one CLI |
-| Annotation tool | Label Studio | Open-source, supports model-assisted pre-labeling, YOLO export |
+| Auto-labeling | OmniParser V2 (Microsoft) + Florence-2 | Zero-annotation training pipeline; YOLO + Florence-2 detects and describes all UI elements automatically |
+| Annotation tool (fallback) | Label Studio | Open-source manual annotation, used as fallback when OmniParser accuracy is insufficient |
 | Collector UI toolkit | PySide6 | Collector UI is a local desktop control surface tightly coupled to Python capture/training code; avoiding a JS/Electron shell keeps the system single-runtime and simpler to ship |
 | Runtime packaging | `ApplicationPack` directory artifact | Clean boundary for hot-swappable per-app models, labels, workflows, and verifier rules |
 | Window detection | Quartz CGWindowList | Native macOS window enumeration; reliable foundation for routing/capture across local and remote app surfaces |
@@ -261,7 +262,7 @@ V1 should ship a **small desktop collector controller**, not a full product shel
 | Screen capture | `mss` | ScreenCaptureKit via pyobjc | Benchmark both in Phase 1. mss is simpler; SCK is faster but harder from Python. Go with mss unless it can't hit 20 FPS for the target app window/region. |
 | Inference runtime | CoreML export | ONNX Runtime + CoreML EP | Export model to both formats, benchmark inference time. CoreML should be faster on ANE, but ONNX is more portable. |
 | OCR engine | PaddleOCR | EasyOCR, Tesseract | Test all three on VDI-compressed screenshots. Pick the one with best accuracy on small UI text. |
-| Pre-labeling | GroundingDINO | Manual-only or other zero-shot detectors | Validate pre-label quality and correction time on the first pack before treating it as standard workflow. |
+| VLM review provider | Anthropic Claude Vision | OpenAI GPT-4o | Benchmark review accuracy and cost on OmniParser low-confidence labels. |
 | LLM provider (V1) | Anthropic Claude | OpenAI vision models | Benchmark reasoning quality, latency, and cost on fixed workflows. |
 | Coordinate input | pyautogui | CGEvent via pyobjc | Keep pyautogui for first implementation. If precision or reliability is insufficient, upgrade to CGEvent. |
 
@@ -323,13 +324,14 @@ Key architectural properties:
 - **Exit criterion**: runtime loads a dummy pack and routes execution without shared-code changes
 
 ### M3: First Pack Data Pipeline (Week 3)
-**Deliverable**: Data collector that records screenshots + clicks for the first target app; annotation workflow documented and tested.
+**Deliverable**: Data collector that records screenshots + clicks for the first target app; OmniParser auto-labeling pipeline documented and tested.
 - Data collector (background capture + click logging)
 - Collector UI with session controls and output handoff
+- OmniParser auto-labeling integration (`gazefy auto-label`)
+- VLM review loop for low-confidence OmniParser labels
 - YOLO dataset exporter (`datasets/<app>/images`, `labels`, `dataset.yaml`)
-- GroundingDINO pre-annotation evaluation script
 - VDI augmentation transforms
-- **Exit criterion**: 50 annotated screenshots produced in under 2 hours (collection + pre-label + correction)
+- **Exit criterion**: 200 auto-labeled screenshots produced in under 1 hour (collection + OmniParser + VLM review), zero manual annotation
 
 ### M4: First Trained Pack + Detection (Week 4)
 **Deliverable**: Trained application pack that detects UI elements on target application screenshots with mAP@0.5 > 90%.
@@ -375,14 +377,14 @@ Key architectural properties:
 | VDI compression degrades detection accuracy below target | High | Aggressive augmentation during training; validate on real VDI screenshots early (M3/M4) |
 | Retina coordinate translation introduces systematic click offset | High | Build coordinate validation test in M5; compare expected vs actual click positions |
 | mss capture can't hit 20 FPS for the target window/region on macOS | Medium | Benchmark in M1; fallback to ScreenCaptureKit if needed |
-| GroundingDINO pre-annotation quality too low for target app | Medium | Test in M3; fallback to manual annotation |
+| OmniParser auto-label quality too low for VDI-compressed screenshots | Medium | Test in M3; VLM review loop corrects low-confidence labels; fallback to manual annotation in Label Studio |
 | Small UI elements (checkboxes, 12px icons) undetectable at 640px input | Medium | Train at 1024px input resolution; if still insufficient, go to 1280px |
 | LLM hallucinates actions or misidentifies elements | Medium | Pre-click verification, constrained action schema, dry_run testing before live execution |
 | Wrong pack routed for the active screen | Medium | Conservative router rules; fail closed unless pack match is confident |
 | OCR cost inflates latency | Medium | OCR only on cropped candidates; cache OCR for stable elements |
 | pyautogui click doesn't register reliably in the target application surface | Low | Test in M1 on the initial target environment. Fallback: CGEvent |
 | Model overfits to current application theme/data | Low | Augmentation + periodic retraining as application updates |
-| VLM pseudo-labels contain errors that corrupt the fine-tune dataset | Medium | Use source trust weighting; validate on held-out set before hot-swapping the model |
+| OmniParser/VLM pseudo-labels contain errors that corrupt the fine-tune dataset | Medium | Use source trust weighting (OmniParser high-conf > VLM-reviewed > VLM-only); validate on held-out set before hot-swapping the model |
 | Drift monitor triggers false re-annotation during normal UI transitions | Low | Enforce cooldown period and minimum window size before triggering |
 
 ### Open Questions
@@ -404,7 +406,7 @@ V2 extends Gazefy from a "train once, deploy" model to a continuously improving 
 |----------|-----------|
 | Pack confidence degrades after UI update | DriftMonitor detects drop → auto re-annotate → fine-tune → hot-swap |
 | New UI state never seen during initial training | ActiveLearner captures low-confidence detections → VLM labels them → fine-tune |
-| Operator wants to add a new application pack with minimal effort | HybridAnnotator runs on 50 screenshots → VLM pseudo-labels → LoRA fine-tune in ~30 min |
+| Operator wants to add a new application pack with minimal effort | OmniParser auto-labels 200 screenshots → VLM reviews low-confidence → train YOLO in ~2 hours → pack ready |
 | System learns which clicks reliably produce screen changes | RewardBuffer accumulates confirmed-click frames → positive training set grows automatically |
 
 ### V2 Milestones
@@ -412,7 +414,7 @@ V2 extends Gazefy from a "train once, deploy" model to a continuously improving 
 | Milestone | Description |
 |-----------|-------------|
 | M8a | `RewardBuffer`: log confirmed/failed clicks with frames for training |
-| M8b | `AnnotationConverter`: transform annotations.jsonl → YOLO training format |
+| M8b | `AutoLabeler`: OmniParser V2 → YOLO training format (replaces HybridAnnotator for initial labeling) |
 | M8c | `DriftMonitor`: rolling confidence tracking + manual and automatic trigger |
 | M8d | `ActiveLearner`: uncertainty threshold sampling + batched VLM labeling |
 | M8e | `AutoTrainer`: wire all four into an end-to-end fine-tune pipeline |

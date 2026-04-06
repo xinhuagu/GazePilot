@@ -4,11 +4,11 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-green.svg)](LICENSE)
 
-AI-driven screen automation for any application — desktop, VDI, remote, or legacy. Train a custom YOLO neural network to perceive your application's UI from screen pixels alone, then let an LLM operate it precisely. No accessibility API, no source code, no plugins required.
+AI-driven screen automation for any application — desktop, VDI, remote, or legacy. Uses OmniParser + VLM auto-labeling to train a custom YOLO neural network from screen pixels alone — **no manual annotation required**. Then let an LLM operate it precisely. No accessibility API, no source code, no plugins required.
 
 ## Why Gazefy?
 
-Many applications have no automation API — enterprise software, legacy systems, VDI-hosted apps, proprietary tools. General-purpose screen agents (Anthropic Computer Use, OmniParser) work across any app but lack precision for specific software. Gazefy flips this: **train once for your application, operate with high accuracy forever.**
+Many applications have no automation API — enterprise software, legacy systems, VDI-hosted apps, proprietary tools. General-purpose screen agents (Anthropic Computer Use, OmniParser) work across any app but lack precision for specific software. Pure VLM agents are slow (2-5s per step). Gazefy combines the best of both worlds: **OmniParser intelligence for training, YOLO speed for runtime** — achieving near-zero annotation cost with 20ms inference.
 
 Works with:
 - Desktop applications (Windows, macOS)
@@ -20,18 +20,28 @@ Works with:
 ## How It Works
 
 ```
-Screen Capture (20 FPS)
-    ↓
-Change Detector (skip unchanged frames)
-    ↓
-YOLO Model (custom-trained for your app)  ← or GroundingDINO (zero-shot)
-    ↓
-UIMap (structured element map: buttons, menus, inputs, …)
-    ↓
-    ├── Cursor Monitor  → "cursor is on [button] Save"
-    ├── LLM Reasoning   → decides what to click/type next
-    └── Action Executor → precise mouse/keyboard via pyautogui
+┌─── Training Pipeline (offline, automated) ─────────────────────────┐
+│  Screenshots → OmniParser (YOLO+Florence-2) → auto-labels          │
+│            → VLM (Claude) reviews low-confidence → refined labels   │
+│            → Train lightweight YOLO → CoreML export                 │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─── Runtime Pipeline (real-time, 20ms) ─────────────────────────────┐
+│  Screen Capture (20 FPS)                                            │
+│      ↓                                                              │
+│  Change Detector (skip unchanged frames)                            │
+│      ↓                                                              │
+│  YOLO Model (auto-trained via OmniParser pipeline)                  │
+│      ↓                                                              │
+│  UIMap (structured element map: buttons, menus, inputs, …)          │
+│      ↓                                                              │
+│      ├── Cursor Monitor  → "cursor is on [button] Save"            │
+│      ├── LLM Reasoning   → decides what to click/type next         │
+│      └── Action Executor → precise mouse/keyboard via pyautogui    │
+└─────────────────────────────────────────────────────────────────────┘
 ```
+
+**Core principle: Train with VLM intelligence, deploy with YOLO speed.**
 
 ## Key Features
 
@@ -39,10 +49,10 @@ UIMap (structured element map: buttons, menus, inputs, …)
 - **Real-time cursor awareness** — know which UI element the mouse is hovering over at 60 Hz
 - **LLM-driven operation** — describe a task in natural language, Gazefy executes it
 - **Semantic recording** — record interactions as element identities, replay on any screen state
-- **Video record + annotate** — capture a session as MP4 + events; annotate all visible UI elements post-hoc using a hybrid pipeline (GroundingDINO precise bboxes → EasyOCR free text → Claude Vision for icons only)
+- **Video record + annotate** — capture a session as MP4 + events; auto-annotate via OmniParser (YOLO detection + Florence-2 description) + VLM review
 - **Learn mode** — click any UI element, VLM identifies it and builds an icon label dictionary
 - **VDI-optimized** — handles compression artifacts, network latency, and pixel-only environments
-- **Training pipeline included** — collect screenshots, annotate, train, package, deploy
+- **Zero-annotation training pipeline** — OmniParser auto-labels screenshots, VLM reviews edge cases, YOLO trains automatically. No Label Studio required.
 - **Self-improving pipeline** — verification loop as reward signal, VLM→YOLO distillation, drift detection, and active learning continuously refine the model without human annotation
 
 ## Quick Start
@@ -73,13 +83,17 @@ gazefy collect --window "Citrix" --pack-name my_erp --interval-ms 500
 gazefy collector
 ```
 
-### Annotate & Train
+### Auto-Label & Train (No Manual Annotation)
 
 ```bash
-# After annotating in Label Studio, split into train/val
-gazefy prep datasets/my_erp/session_xxx --split 0.8
+# Auto-label with OmniParser (zero human effort)
+gazefy auto-label datasets/my_erp/session_xxx/
 
-# Train and package as ApplicationPack
+# Optional: VLM review for low-confidence labels
+gazefy auto-label datasets/my_erp/session_xxx/ --vlm-review
+
+# Split and train
+gazefy prep datasets/my_erp/session_xxx --split 0.8
 gazefy train \
   --dataset datasets/my_erp/session_xxx/dataset.yaml \
   --pack-name my_erp \
@@ -93,14 +107,8 @@ gazefy train \
 # Record a video session + all mouse events (no model required)
 gazefy record-video --fps 10
 
-# Annotate: GroundingDINO detects elements, EasyOCR reads text, Claude labels icons
+# Auto-annotate recorded session with OmniParser pipeline
 gazefy annotate-video recordings/session_xxx/
-
-# Annotate using your trained pack (faster, higher precision)
-gazefy annotate-video recordings/session_xxx/ --pack my_erp
-
-# Full-frame VLM only (no local detector needed)
-gazefy annotate-video recordings/session_xxx/ --detector none
 
 # Interactive learn mode: click elements, VLM builds icon dictionary
 gazefy learn --window "My App" --pack my_erp
@@ -131,19 +139,27 @@ gazefy/
 │   ├── monitor.py           CLI cursor monitor + trajectory recording/replay
 │   ├── learner.py           Click-to-label: VLM builds icon dictionary
 │   ├── video_recorder.py    Screen→MP4 + mouse events (no model required)
-│   ├── video_annotator.py   Full-frame VLM annotation pipeline
-│   └── hybrid_annotator.py  GroundingDINO + EasyOCR + Claude (icons only)
+│   └── video_annotator.py   OmniParser + VLM annotation pipeline
 ├── capture/                 Screen capture, window finder, change detection
 ├── detection/
 │   ├── detector.py          YOLO inference → list[Detection]
-│   ├── ocr.py               EasyOCR per-element text extraction
-│   └── grounding.py         GroundingDINO zero-shot UI element detector
+│   ├── ocr.py               OCR per-element text extraction
+│   ├── omniparser.py        OmniParser V2 integration (offline auto-labeling)
+│   └── florence2.py         Florence-2 element description model
 ├── tracker/                 UIMap, element tracking with stable IoU-based IDs
 ├── cursor/                  60 Hz cursor-to-element resolution
 ├── actions/                 Action types, executor, coordinate transform
 ├── llm/                     LLM interface (Anthropic), formatters, parsers
 ├── collector_ui/            PySide6 data collection GUI + floating recorder
-├── training/                Collector, dataset prep, pack trainer
+├── training/
+│   ├── collector.py         Screenshot collection
+│   ├── auto_labeler.py      OmniParser → YOLO label pipeline (zero annotation)
+│   ├── vlm_reviewer.py      VLM review + correction for low-confidence labels
+│   ├── dataset_prep.py      Train/val split
+│   ├── pack_trainer.py      YOLO training + pack packaging
+│   ├── reward_buffer.py     Verification-driven training signal
+│   ├── drift_monitor.py     Rolling confidence tracking + auto retrain
+│   └── active_learner.py    Uncertainty sampling + VLM query
 ├── knowledge/               [V2] Optional manual-based enrichment
 └── utils/                   Geometry, timing
 ```
@@ -212,7 +228,8 @@ ruff check gazefy/ && ruff format gazefy/
 | `gazefy train` | Train model and package as ApplicationPack |
 | `gazefy learn` | Click-to-label mode (VLM builds icon dictionary) |
 | `gazefy record-video` | Record screen as MP4 + mouse events |
-| `gazefy annotate-video` | Annotate video session (hybrid or VLM-only) |
+| `gazefy auto-label` | Auto-label screenshots with OmniParser + VLM review |
+| `gazefy annotate-video` | Annotate video session with OmniParser pipeline |
 | `gazefy monitor` | Real-time cursor-to-element monitoring |
 | `gazefy replay` | Replay a recorded cursor trajectory |
 | `gazefy benchmark` | Capture + change detection benchmark |
@@ -220,37 +237,48 @@ ruff check gazefy/ && ruff format gazefy/
 
 ## Self-Improving Pipeline
 
-A key challenge with per-app YOLO models is that they degrade as UI themes, layouts, or VDI compression settings change. Gazefy addresses this with a self-improving loop that requires **no human annotation** after the initial pack is trained:
+Gazefy uses a **two-phase approach**: OmniParser handles initial training with zero annotation, then the self-improving loop keeps the model accurate over time.
+
+### Phase 1: Zero-Annotation Training (OmniParser Pipeline)
+
+```
+Collect screenshots from target app
+    ↓
+OmniParser V2 (YOLO + Florence-2) → auto-detect all UI elements + semantic descriptions
+    ↓
+VLM (Claude Vision) reviews low-confidence detections → refined labels
+    ↓
+Auto-convert to YOLO training format
+    ↓
+Train lightweight YOLO → CoreML export → ApplicationPack ready
+```
+
+**Result**: A production-ready pack in ~2 hours with zero manual annotation.
+
+### Phase 2: Continuous Self-Improvement
 
 ```
 Live operation
     ↓
 ActionExecutor verifies each click (screen_changed = True/False)
     ↓
-Confirmed clicks → positive training samples
-Failed clicks    → hard negative examples
-    ↓
-HybridAnnotator runs on fresh screenshots periodically
-(GroundingDINO bboxes → EasyOCR text → Claude Vision for icons)
-    ↓
-Pseudo-labels → YOLO fine-tune buffer (VLM→YOLO distillation)
+Confirmed clicks → positive samples / Failed clicks → hard negatives
     ↓
 Drift detector monitors mean YOLO confidence
     ↓ (drops below threshold)
-Auto re-annotation → fine-tune → updated pack deployed
+OmniParser re-annotation → VLM review → fine-tune → hot-swap model
 ```
-
-The five directions driving this:
 
 | Direction | Mechanism | Status |
 |-----------|-----------|--------|
+| **OmniParser auto-labeling** | OmniParser V2 generates training data from raw screenshots | Core pipeline |
+| **VLM review loop** | Claude Vision reviews + corrects low-confidence OmniParser labels | Core pipeline |
 | **Verification as reward** | `screen_changed` flag from executor seeds training buffer | Built (M4/M5) |
-| **VLM→YOLO distillation** | HybridAnnotator pseudo-labels → YOLO training without human annotation | Built (M5/M8b) |
 | **Drift detection** | Monitor mean detection confidence; trigger re-annotation on drop | Planned M8c |
-| **Active learning** | Low-confidence detections batched to Claude Vision → fine-tune buffer | Planned M8d |
+| **Active learning** | Low-confidence detections batched to VLM → fine-tune buffer | Planned M8d |
 | **LoRA app adapters** | Frozen universal base model + tiny per-app LoRA adapter | V2 research |
 
-This is the "learn from doing" principle: the system gets better the more it operates, using its own action outcomes as the training signal.
+**Core principle: OmniParser provides the intelligence at training time, YOLO provides the speed at runtime.**
 
 ## License
 

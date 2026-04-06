@@ -66,8 +66,10 @@ python scripts/benchmark.py
 - **Action execution**: pyautogui
 - **Window detection**: pyobjc-framework-Quartz
 - **LLM**: Anthropic Claude API
+- **Auto-labeling**: OmniParser V2 (Microsoft) + Florence-2 for zero-annotation training
+- **VLM review**: Claude Vision reviews low-confidence OmniParser labels
 - **Training**: Ultralytics CLI + albumentations for augmentation
-- **Annotation**: Label Studio + GroundingDINO pre-labeling
+- **Annotation (fallback)**: Label Studio for manual correction when needed
 
 ## Important Conventions
 

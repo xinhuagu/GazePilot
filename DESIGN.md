@@ -380,10 +380,12 @@ stability:    5                   # Consecutive frames confirmed
 
 ### 8. Training Pipeline (`gazefy/training/`)
 - **Per-pack data collection mode**: auto-capture screenshots + record cursor clicks while user operates one target application
-- **Model-assisted labeling**: use current model for pre-annotation, human corrects in Label Studio
+- **OmniParser auto-labeling**: OmniParser V2 (YOLO + Florence-2) processes screenshots offline → detects all UI elements with semantic descriptions → outputs YOLO-format labels with zero manual annotation
+- **VLM review loop**: Claude Vision reviews low-confidence OmniParser labels → refines class assignments and bounding boxes → produces high-quality training data
 - **VDI-specific augmentation**: JPEG compression (quality 20-80), blur, color shift, resolution scaling
 - **Training**: Ultralytics API, supports MPS/CUDA
 - **Export**: produce an ApplicationPack artifact, not just a naked model file
+- **Legacy path**: Label Studio manual annotation still supported as fallback but no longer the primary workflow
 
 ### 8.5. Collector UI (`gazefy/collector_ui/`)
 - Lightweight desktop controller for training-sample collection; intended to stay visible while the operator works inside the VDI app
@@ -687,7 +689,9 @@ Gazefy/
 │   │   └── change_detector.py      # 3-tier frame diff (hash → MAD → dirty rects)
 │   │
 │   ├── detection/                  # Model inference
-│   │   └── detector.py             # Runs pack's YOLO model → list[Detection]
+│   │   ├── detector.py             # Runs pack's YOLO model → list[Detection]
+│   │   ├── omniparser.py           # OmniParser V2 integration (offline auto-labeling)
+│   │   └── florence2.py            # Florence-2 element description model
 │   │
 │   ├── tracker/                    # Element tracking
 │   │   ├── ui_map.py               # UIMap, UIElement, Detection (central types)
@@ -713,9 +717,14 @@ Gazefy/
 │   │
 │   ├── training/                   # Model training pipeline
 │   │   ├── collector.py            # Capture screenshots → dataset
+│   │   ├── auto_labeler.py         # OmniParser V2 → YOLO labels (zero annotation)
+│   │   ├── vlm_reviewer.py         # VLM review + correction of low-confidence labels
 │   │   ├── dataset_prep.py         # Split train/val after annotation
 │   │   ├── trainer.py              # Ultralytics wrapper → pack packaging
-│   │   └── train_pack.py           # CLI: train → package → ApplicationPack
+│   │   ├── train_pack.py           # CLI: train → package → ApplicationPack
+│   │   ├── reward_buffer.py        # Verification-driven training signal
+│   │   ├── drift_monitor.py        # Rolling confidence tracking + retrain trigger
+│   │   └── active_learner.py       # Uncertainty sampling + VLM query
 │   │
 │   └── utils/
 │       ├── geometry.py             # Rect, Point, IoU
@@ -762,33 +771,40 @@ ActionExecutor         → list[ActionResult] (status, executed_at, screen_chang
 ```
 mss, numpy, opencv-python-headless, ultralytics, onnxruntime,
 pyautogui, pyobjc-framework-Quartz, Pillow, pyyaml, httpx, anthropic
-Training extras: albumentations
+Training extras: albumentations, transformers (Florence-2)
+Auto-labeling extras: omniparser (Microsoft), Florence-2
 Knowledge extras: beautifulsoup4, lxml
 ```
 
 ## Training Pipeline: End-to-End Workflow
 
-Each ApplicationPack must be trained independently. Here is the complete flow from zero to a working pack for one target application.
+Each ApplicationPack must be trained independently. The pipeline uses **OmniParser for automatic labeling** — no manual annotation required.
+
+### Core Principle
+
+**Train with VLM intelligence, deploy with YOLO speed.** OmniParser (YOLO + Florence-2) provides the perception intelligence at training time. The output YOLO model provides 20ms inference at runtime.
 
 ### Overview
 
 ```
 Step 1: Screenshot Collection    (you operate one target app, system auto-captures)
          ↓
-Step 2: Annotation               (draw boxes on screenshots, label each UI element)
+Step 2: OmniParser Auto-Labeling (OmniParser V2 detects + describes all UI elements)
          ↓
-Step 3: Data Augmentation        (simulate VDI compression, resolution changes, expand dataset)
+Step 3: VLM Review (optional)    (Claude Vision reviews low-confidence labels)
          ↓
-Step 4: Training                 (feed to YOLO, produces pack-specific detector/classifier)
+Step 4: Data Augmentation        (simulate VDI compression, resolution changes, expand dataset)
          ↓
-Step 5: Validation               (run on test screenshots, check detection quality)
+Step 5: Training                 (feed to YOLO, produces pack-specific detector)
          ↓
-Step 6: Iteration                (fix weak spots: add more screenshots, re-annotate, retrain)
+Step 6: Validation               (run on test screenshots, check detection quality)
          ↓
-Step 7: Packaging                (export models + YAML rules into ApplicationPack)
+Step 7: Iteration                (auto-refine via self-improving loop, or manual correction)
          ↓
-Step 8: Deployment               (drop pack into app_packs/ and let runtime load it)
+Step 8: Packaging + Deployment   (export models + YAML rules into ApplicationPack)
 ```
+
+**Legacy path**: Label Studio manual annotation is still supported via `gazefy annotate-manual` but is no longer the default workflow.
 
 ### Collector UI Workflow
 
@@ -861,9 +877,36 @@ Right-click context menu         →  screenshot_006.png
 
 **Target**: ~100-200 screenshots for a moderately complex application pack.
 
-### Step 2: Annotation
+### Step 2: OmniParser Auto-Labeling
 
-Draw bounding boxes on each screenshot and label every UI element with its class.
+OmniParser V2 processes each screenshot automatically — no human drawing required.
+
+```bash
+# Auto-label all screenshots in a session
+gazefy auto-label datasets/my_erp/session_XXXXXX/
+
+# With VLM review for low-confidence detections
+gazefy auto-label datasets/my_erp/session_XXXXXX/ --vlm-review
+```
+
+**How it works**:
+```
+Screenshot → OmniParser V2 YOLO → detect all interactable regions (bbox + confidence)
+                ↓
+         Florence-2 → describe each element semantically ("Save button", "Customer ID input")
+                ↓
+         Class mapper → map descriptions to YOLO class taxonomy (button, input_field, menu_item, ...)
+                ↓
+         YOLO format labels (.txt files, normalized coordinates)
+```
+
+**VLM review (optional but recommended for VDI)**:
+- OmniParser detections with confidence < 0.5 are sent to Claude Vision in batches
+- VLM confirms, corrects, or rejects each detection
+- VLM-confirmed labels get higher trust weight during training
+- Cost: ~$0.01-0.03 per screenshot, ~$10-30 for 1000 screenshots
+
+**Legacy fallback**: Manual annotation via Label Studio is still supported:
 
 Example annotation on a screenshot:
 ```
@@ -1061,11 +1104,19 @@ datasets/
 | Step | Time | Notes |
 |------|------|-------|
 | Screenshot collection | 2-3 hours | Systematically cover all UI states |
-| Pre-annotation (GroundingDINO) | ~30 min | Automated |
-| Manual correction | 3-4 hours | ~200 images x ~1 min each |
+| OmniParser auto-labeling | ~30-60 min | Fully automated, zero human effort |
+| VLM review (optional) | ~10-20 min | Automated API calls, ~$10-30 cost |
 | Training | 1-2 hours | Machine runs, you wait |
-| Validation + iteration (3 rounds) | 3-5 hours | Add images + retrain each round |
-| **Total** | **~2 days** | Results in the first high-accuracy ApplicationPack for one target app |
+| Validation + iteration (1-2 rounds) | 1-2 hours | Auto-refine via self-improving loop |
+| **Total** | **~½ day** | Down from ~2 days with manual annotation |
+
+**Comparison with legacy manual annotation**:
+| Metric | OmniParser Pipeline | Manual (Label Studio) |
+|--------|--------------------|-----------------------|
+| Labeling time | ~30 min (automated) | 3-4 hours (human) |
+| Cost per 200 images | ~$5 (VLM API) | $500-2000 (human labor) |
+| Iterations needed | 1-2 | 3-5 |
+| Total time to first pack | **~½ day** | ~2 days |
 
 ## Implementation Order
 
@@ -1115,12 +1166,12 @@ TrainingBuffer accumulates (frame, bbox, label, reward) tuples
     ↓
 DriftMonitor tracks rolling mean YOLO confidence
     ↓ (confidence < drift_threshold)
-AutoAnnotator runs HybridAnnotator on buffered frames
-    ├── GroundingDINO: zero-shot bboxes
-    ├── EasyOCR: text labels for text-heavy elements
-    └── Claude Vision: semantic labels for icon-only elements
+AutoAnnotator runs OmniParser on buffered frames
+    ├── OmniParser YOLO: detect interactable regions
+    ├── Florence-2: semantic element descriptions
+    └── Claude Vision: reviews low-confidence detections
     ↓
-Pseudo-labels → YOLO training format (annotations.jsonl → YOLO .txt)
+Auto-labels → YOLO training format (.txt normalized coords)
     ↓
 Fine-tune YOLO on fine-tune buffer (LoRA or last-N-layer fine-tune)
     ↓
@@ -1208,10 +1259,11 @@ class DriftMonitor:
 
 When `is_drifted()` returns True, the orchestrator:
 1. Captures a batch of representative screenshots (N=50 covering recent UIMap states)
-2. Runs HybridAnnotator on the batch (GroundingDINO + EasyOCR + Claude Vision)
-3. Converts output to YOLO format
-4. Schedules a fine-tuning job (background process, does not interrupt live operation)
-5. Hot-swaps the updated model into the running pack once training completes
+2. Runs OmniParser auto-labeling on the batch (YOLO detection + Florence-2 description)
+3. VLM reviews low-confidence labels (Claude Vision)
+4. Converts output to YOLO training format
+5. Schedules a fine-tuning job (background process, does not interrupt live operation)
+6. Hot-swaps the updated model into the running pack once training completes
 
 The re-annotation trigger can also be set manually (`gazefy drift-check --pack my_app`).
 
@@ -1263,7 +1315,7 @@ Benefits:
 - Base model updates improve all packs simultaneously
 - Adapters are tiny (~10 MB vs ~100 MB for full model) — fast to update and distribute
 
-The universal base can be bootstrapped by aggregating pseudo-labels from HybridAnnotator runs
+The universal base can be bootstrapped by aggregating OmniParser auto-labels from runs
 across multiple apps, creating a large diverse UI screenshot corpus without human annotation.
 
 ### Data Flow for the Self-Improving Loop
