@@ -419,3 +419,254 @@ V2 extends Gazefy from a "train once, deploy" model to a continuously improving 
 | M8d | `ActiveLearner`: uncertainty threshold sampling + batched VLM labeling |
 | M8e | `AutoTrainer`: wire all four into an end-to-end fine-tune pipeline |
 | M9 | LoRA adapter framework: universal base model + per-app adapter, bootstrapped from multi-app HybridAnnotator corpus |
+
+## V3 Roadmap: ClawGUI Integration — RL Training, Process Reward, Standardized Eval, Cross-Platform
+
+V3 integrates key technologies from [ClawGUI](https://github.com/ZJU-REAL/ClawGUI) (ZJU-REAL, Apache 2.0), an open-source GUI Agent research framework for mobile platforms. ClawGUI and Gazefy solve the same fundamental problem — AI-driven screen automation — but from opposite ends of the spectrum. Gazefy is engineering-first (fast YOLO inference, enterprise deployment), while ClawGUI is research-first (RL training, standardized evaluation, cross-platform agents). V3 combines both strengths.
+
+### Why ClawGUI
+
+| What Gazefy lacks | What ClawGUI provides |
+|-------------------|----------------------|
+| Only supervised learning (OmniParser → YOLO) | **GiGPO online reinforcement learning** with parallel Docker environments |
+| Binary reward signal (screen_changed: true/false) | **Process Reward Model (PRM)** — step-level quality scoring |
+| No standardized benchmark | **ClawGUI-Eval** — 6 benchmarks, 11+ models, 95.8% official reproduction rate |
+| macOS desktop only | **Cross-platform device control** — Android (ADB), HarmonyOS (HDC), iOS (XCTest) |
+
+### What Gazefy brings to the table (unique value ClawGUI does not have)
+
+| Gazefy capability | Why it matters |
+|-------------------|---------------|
+| **VLM → YOLO distillation** (20ms runtime) | ClawGUI VLM agents run at 2-5s per step — unusable for real-time enterprise workflows |
+| **ApplicationPack architecture** | Per-app precision with hot-swappable models, ontologies, policies — ClawGUI has no per-app concept |
+| **Enterprise safety layer** | Explicit policies, forbidden zones, never_retry rules — ClawGUI has no safety constraints |
+| **VDI/remote display support** | Enterprise software often runs inside Citrix/RDP — ClawGUI only handles native device screens |
+
+### V3 Use Cases
+
+| # | Use Case | Priority |
+|---|----------|----------|
+| UC13 | **RL-augmented training**: Use GiGPO online reinforcement learning to train decision strategies, producing higher-quality interaction data for YOLO distillation. | P1 — V3 |
+| UC14 | **Process Reward verification**: Replace binary `screen_changed` with PRM step-level quality scoring. Each action is evaluated for "did this step bring us closer to the goal?" | P1 — V3 |
+| UC15 | **Standardized benchmarking**: Integrate ClawGUI-Eval's 6-benchmark evaluation framework for comparable, reproducible performance metrics. | P1 — V3 |
+| UC16 | **Mobile device automation**: Extend the ActionExecutor abstraction to support Android (ADB), HarmonyOS (HDC), and iOS (XCTest) device control. | P2 — V3 |
+| UC17 | **Parallel training environments**: Use Docker-parallel Android emulators (or VNC-connected virtual desktops) to mass-generate RL training data. | P2 — V3 |
+
+### V3 Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    Gazefy V3: Unified GUI Agent Platform                │
+│                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                    TRAINING PHASE                                  │  │
+│  │                                                                   │  │
+│  │  ┌─────────────┐    ┌──────────────┐    ┌────────────────────┐   │  │
+│  │  │ OmniParser   │    │ ClawGUI-RL   │    │ Process Reward     │   │  │
+│  │  │ Auto-Label   │───→│ GiGPO Engine │←───│ Model (PRM)        │   │  │
+│  │  │ (Zero-shot)  │    │ (Online RL)  │    │ (Step-level score) │   │  │
+│  │  └──────┬───────┘    └──────┬───────┘    └────────────────────┘   │  │
+│  │         │                   │                                     │  │
+│  │         ▼                   ▼                                     │  │
+│  │  ┌──────────────────────────────────┐                             │  │
+│  │  │     VLM → YOLO Distillation      │  ← Gazefy core innovation  │  │
+│  │  │  (VLM intelligence → 20ms speed) │                             │  │
+│  │  └──────────────┬───────────────────┘                             │  │
+│  │                 ▼                                                 │  │
+│  │  ┌──────────────────────────┐                                     │  │
+│  │  │    ApplicationPack       │                                     │  │
+│  │  │  model.pt + ontology     │                                     │  │
+│  │  │  + policies + prompts    │                                     │  │
+│  │  └──────────────────────────┘                                     │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                    EVALUATION PHASE                                │  │
+│  │                                                                   │  │
+│  │  ┌─────────────────┐  ┌───────────────┐  ┌────────────────────┐  │  │
+│  │  │ Gazefy Regression│  │ ClawGUI-Eval  │  │ Unified Metrics    │  │  │
+│  │  │ Suite (task-level│  │ 6 Benchmarks  │  │ Perception + Task  │  │  │
+│  │  │ + safety)        │  │ (grounding)   │  │ + Safety           │  │  │
+│  │  └─────────────────┘  └───────────────┘  └────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                    RUNTIME PHASE                                   │  │
+│  │                                                                   │  │
+│  │  Screen → Change Detect → YOLO (20ms) → UIMap → LLM → Execute   │  │
+│  │                                              ↑                    │  │
+│  │                                         PRM Verifier              │  │
+│  │                                     (step-level confidence)       │  │
+│  │                                              │                    │  │
+│  │                                    ┌─────────┴──────────┐         │  │
+│  │                                    │ Self-Improvement    │         │  │
+│  │                                    │ RewardBuffer + PRM  │         │  │
+│  │                                    │ + DriftMonitor      │         │  │
+│  │                                    │ + ActiveLearner     │         │  │
+│  │                                    └────────────────────┘         │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                    CROSS-PLATFORM BACKENDS                         │  │
+│  │                                                                   │  │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────────┐   │  │
+│  │  │ Desktop  │  │ VDI      │  │ Android  │  │ iOS            │   │  │
+│  │  │ pyautogui│  │ Citrix   │  │ ADB      │  │ XCTest         │   │  │
+│  │  │ (Gazefy) │  │ (Gazefy) │  │(ClawGUI) │  │ (ClawGUI)      │   │  │
+│  │  └──────────┘  └──────────┘  └──────────┘  └────────────────┘   │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### V3 Technical Stack Additions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| RL training framework | ClawGUI-RL (GiGPO + PRM) | Only open-source GUI Agent online RL infrastructure; step-level reward is ~10× more precise than Gazefy's binary RewardBuffer |
+| Evaluation framework | ClawGUI-Eval | 6 benchmarks, 95.8% reproduction rate; Gazefy lacks comparable evaluation infrastructure |
+| Mobile device control | ClawGUI-Agent (ADB/HDC/XCTest) | Mature cross-platform solution supporting 12+ chat platforms |
+| Process Reward Model | ClawGUI PRM | Step-level process reward; can serve as Gazefy ActionExecutor verifier |
+| RL training environment | Docker-parallel (Android emulators for mobile; VNC/RDP virtual desktops for enterprise apps) | ClawGUI's Docker parallelization adapted for desktop environments |
+
+### V3 Functional Requirements
+
+#### FR13: Process Reward Verification
+- Replace binary `screen_changed` verification with PRM step-level quality scoring
+- After each action, compute PRM score: `PRM(screenshot_before, action, screenshot_after, goal) → score ∈ [0, 1]`
+- Classify step quality: `EXCELLENT (>0.8)`, `ACCEPTABLE (0.5-0.8)`, `POOR (<0.5)`, `ABORT (<0.2)`
+- Feed PRM scores into RewardBuffer for training signal enrichment
+- PRM runs as a lightweight sidecar model (Qwen2.5-VL-2B or distilled variant)
+- Fallback to `screen_changed` binary signal if PRM is unavailable or too slow
+
+#### FR14: GiGPO Reinforcement Learning Training
+- Support GiGPO (Group-relative Policy Optimization with hierarchical advantage) as an alternative to supervised-only YOLO training
+- Spawn parallel training environments: Docker Android emulators for mobile packs, VNC-connected virtual desktops for enterprise packs
+- RL agent explores UI autonomously → generates high-quality interaction trajectories → distill to YOLO
+- Integrate PRM step-level rewards with GiGPO advantage estimation
+- Output: optimized LLM decision policy + high-quality exploration data for YOLO distillation
+- Training should be runnable on a single multi-GPU machine (no cloud infrastructure required, consistent with V1 non-goal)
+
+#### FR15: Standardized Evaluation Pipeline
+- Integrate ClawGUI-Eval's Infer→Judge→Metric pipeline
+- Support running Gazefy packs against standard benchmarks: ScreenSpot-Pro, AndroidWorld, MobileWorld
+- CLI command: `gazefy eval --benchmark <name> --pack <pack_name>`
+- Report unified metrics: element grounding accuracy, task success rate, step efficiency, safety score
+- Compare Gazefy results against ClawGUI's published baseline numbers
+
+#### FR16: Cross-Platform ActionExecutor
+- Abstract the ActionExecutor interface to support multiple backends
+- `DesktopBackend`: pyautogui / CGEvent (existing V1 implementation)
+- `VDIBackend`: Citrix/RDP coordinate injection (existing V1 scope)
+- `ADBBackend`: Android device control via ADB (from ClawGUI)
+- `HDCBackend`: HarmonyOS device control via HDC (from ClawGUI)
+- `XCTestBackend`: iOS device control via XCTest (from ClawGUI)
+- ApplicationPack specifies which backend(s) it supports
+- The same Pack ontology/policy structure works across backends; only the action execution layer differs
+
+### V3 Key Modules
+
+```python
+# gazefy/training/rl_trainer.py
+
+class RLTrainer:
+    """
+    Integrates ClawGUI-RL's GiGPO + PRM into Gazefy's training pipeline.
+
+    Pipeline:
+    1. Spawn parallel training environments (Docker or VNC)
+    2. Agent interacts with UI using current YOLO + LLM policy
+    3. PRM scores each step (not just final success/failure)
+    4. GiGPO computes hierarchical advantage estimation
+    5. Policy gradient update
+    6. Periodically distill updated VLM policy → YOLO
+    """
+
+    def __init__(self, pack: ApplicationPack, prm: ProcessRewardModel):
+        self.pack = pack
+        self.prm = prm
+        self.gigpo = GiGPOOptimizer(
+            group_size=8,
+            step_reward_weight=0.7,
+        )
+
+    def train_episode(self, env: GUIEnvironment) -> TrainingMetrics:
+        """One RL episode: observe → act → reward → update."""
+        ...
+
+    def distill_to_yolo(self, vlm_trajectories: list) -> Path:
+        """
+        Gazefy's core: VLM exploration data → YOLO training labels.
+        RL agent explores UI intelligently → produces high-quality
+        screenshots + element annotations → distill to YOLO.
+        """
+        ...
+```
+
+```python
+# gazefy/detection/prm_verifier.py
+
+class PRMVerifier:
+    """
+    Replaces simple screen_changed with step-level quality assessment.
+
+    Before (V1):
+        action → screen_changed? → True/False
+
+    After (V3 with PRM):
+        action → PRM(before, action, after, goal) → score ∈ [0, 1]
+               → "Did this step bring us closer to the goal?"
+    """
+
+    def verify_step(
+        self,
+        before: Screenshot,
+        action: Action,
+        after: Screenshot,
+        goal: str,
+    ) -> StepVerification:
+        score = self.prm.score(before, action, after, goal)
+        return StepVerification(
+            success=score > self.threshold,
+            score=score,
+            should_retry=score < self.retry_threshold,
+            should_abort=score < self.abort_threshold,
+        )
+```
+
+### V3 Success Metrics
+
+| Metric | Target | How to measure |
+|--------|--------|----------------|
+| **RL-trained pack vs supervised-only** | RL-trained Pack achieves ≥ 5% higher task success rate than OmniParser-only Pack on the same regression suite | Run identical regression suite with both Pack variants |
+| **PRM verification accuracy** | PRM correctly classifies step quality ≥ 90% vs human judgment | Human annotators label 200 steps; compare PRM scores |
+| **Benchmark grounding** | ScreenSpot-Pro element grounding score reproducible and comparable | Run `gazefy eval --benchmark screenspot-pro` and compare with ClawGUI published baselines |
+| **Cross-platform Pack reuse** | Same ontology/policy files work on ≥ 2 backends without modification | Deploy one Pack on Desktop + Android; measure shared config percentage |
+| **Post-distillation inference speed** | RL-trained VLM → YOLO distillation maintains ≤ 30ms inference | Benchmark CoreML model exported from RL-augmented training data |
+
+### V3 Milestones
+
+| Milestone | Week | Deliverable | Exit Criterion |
+|-----------|------|-------------|----------------|
+| **M10: PRM Integration** | V3 W1-2 | `PRMVerifier` module replaces binary `screen_changed` as step verifier | PRM scores ≥ 90% aligned with human step-quality judgments on 200 test steps |
+| **M11: GiGPO Training Pipeline** | V3 W3-5 | `RLTrainer` module with Docker-parallel environments and GiGPO optimizer | RL training converges; produces VLM policy that completes ≥ 3 benchmark tasks |
+| **M12: RL→YOLO Distillation Loop** | V3 W6-7 | End-to-end: RL agent explores → generates interaction data → distills to YOLO → Pack auto-updates | RL-augmented Pack outperforms supervised-only Pack by ≥ 5% task success rate |
+| **M13: ClawGUI-Eval Integration** | V3 W8 | `gazefy eval` CLI command with 6 benchmarks | `gazefy eval --benchmark screenspot-pro` produces reproducible scores matching ClawGUI baselines within 2% |
+| **M14: ActionExecutor Abstraction** | V3 W9-10 | `ActionBackend` interface + `DesktopBackend` + `ADBBackend` + `XCTestBackend` | Existing V1 regression suite passes on `DesktopBackend`; basic click/type works on Android via `ADBBackend` |
+| **M15: First Mobile Pack** | V3 W11-12 | Complete Capture→Detect→Act cycle on an Android device | Task success rate ≥ 80% on one mobile application regression suite |
+
+### V3 Risks
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| ClawGUI-RL depends on Docker Android emulators; Gazefy's desktop/VDI targets need different environments | High | Adapt RL environment: use VNC/RDP-connected virtual desktops for enterprise apps instead of Docker Android |
+| PRM model trained only on mobile UI; desktop UI step-reward accuracy unvalidated | Medium | M10 validates PRM on desktop screenshots first; collect 200 human-labeled desktop steps for calibration |
+| GiGPO training requires multi-GPU infrastructure (expensive) | Medium | Start with ClawGUI's 2B parameter model for concept validation; scale up only after proof of value |
+| ClawGUI is an academic project; long-term maintenance uncertain | Medium | Integrate only core algorithms (GiGPO, PRM); avoid deep coupling to ClawGUI's specific codebase |
+| Cross-platform ActionExecutor increases surface area for platform-specific bugs | Medium | Each backend has its own regression suite; backends are fully isolated behind the interface |
+
+### V3 Open Questions
+
+7. **Can PRM trained on mobile screenshots transfer to VDI-compressed desktop screenshots?** — Validate in M10 with cross-domain evaluation.
+8. **What is the optimal RL environment for enterprise desktop apps?** — Compare Docker + VNC virtual desktops vs direct VDI session recording in M11.
+9. **How much RL training data is needed before distillation outperforms OmniParser-only labeling?** — Empirically measure in M12: compare Pack quality at 100, 500, 1000, 5000 RL episodes.
+10. **Should mobile packs reuse the same YOLO architecture or use a different detection backbone?** — Benchmark YOLOv8 vs ClawGUI's native VLM approach on mobile screenshots in M15.
